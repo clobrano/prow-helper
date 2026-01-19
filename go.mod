@@ -1,6 +1,6 @@
 module github.com/clobrano/prow-helper
 
-go 1.25.1
+go 1.25
 
 require (
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
