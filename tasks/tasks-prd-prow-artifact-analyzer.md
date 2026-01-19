@@ -58,15 +58,15 @@ Generated from: `prd-prow-artifact-analyzer.md`
   - [x] 3.8 Write tests for configuration merging with priority order
   - [x] 3.9 Implement `MergeConfig(cli, env, file, defaults *Config) *Config` with priority: CLI > Env > File > Defaults
 
-- [ ] 4.0 Artifact Download
-  - [ ] 4.1 Write tests for destination path construction (`<dest>/<job-name>/<build-id>/`)
-  - [ ] 4.2 Implement `BuildDestinationPath(baseDest string, metadata *ProwMetadata) string`
-  - [ ] 4.3 Write tests for folder existence check and conflict detection
-  - [ ] 4.4 Implement `CheckDestinationConflict(path string) (exists bool, err error)`
-  - [ ] 4.5 Implement user prompt for conflict resolution: Overwrite, Skip, New timestamped folder
-  - [ ] 4.6 Write tests for gsutil command execution (mock external command)
-  - [ ] 4.7 Implement `Download(gsutilCmd string) error` with progress output passthrough
-  - [ ] 4.8 Implement gsutil availability check with clear error message
+- [x] 4.0 Artifact Download
+  - [x] 4.1 Write tests for destination path construction (`<dest>/<job-name>/<build-id>/`)
+  - [x] 4.2 Implement `BuildDestinationPath(baseDest string, metadata *ProwMetadata) string`
+  - [x] 4.3 Write tests for folder existence check and conflict detection
+  - [x] 4.4 Implement `CheckDestinationConflict(path string) (exists bool, err error)`
+  - [x] 4.5 Implement user prompt for conflict resolution: Overwrite, Skip, New timestamped folder
+  - [x] 4.6 Write tests for gsutil command execution (mock external command)
+  - [x] 4.7 Implement `Download(gsutilCmd string) error` with progress output passthrough
+  - [x] 4.8 Implement gsutil availability check with clear error message
 
 - [ ] **CHECKPOINT: Manual Integration Test - Download Flow**
   - [ ] 4.9 Manually test URL parsing with a real PROW URL
