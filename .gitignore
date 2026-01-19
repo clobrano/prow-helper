@@ -1,5 +1,5 @@
 # Binaries
-bin/
+prow-helper
 *.exe
 *.exe~
 *.dll

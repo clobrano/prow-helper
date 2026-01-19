@@ -46,8 +46,8 @@ go install github.com/clobrano/prow-helper@latest
 ```bash
 git clone https://github.com/clobrano/prow-helper
 cd prow-helper
-make build
-make install
+go build
+go install
 ```
 
 ## Usage
@@ -148,16 +148,13 @@ Folder exists. [O]verwrite, [S]kip download, [N]ew timestamped folder?
 
 ```bash
 # Build
-make build
+go build
 
 # Run tests
-make test
+go test ./...
 
 # Install locally
-make install
-
-# Clean
-make clean
+go install
 ```
 
 ## License
