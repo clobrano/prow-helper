@@ -47,16 +47,16 @@ Generated from: `prd-prow-artifact-analyzer.md`
   - [x] 2.5 Write tests for gsutil command construction
   - [x] 2.6 Implement `BuildGsutilCommand(metadata *ProwMetadata, dest string) string`
 
-- [ ] 3.0 Configuration System
-  - [ ] 3.1 Define `Config` struct with fields: `Dest`, `AnalyzeCmd`
-  - [ ] 3.2 Write tests for XDG config file path resolution
-  - [ ] 3.3 Implement `GetConfigPath() string` using XDG Base Directory Specification
-  - [ ] 3.4 Write tests for YAML config file loading
-  - [ ] 3.5 Implement `LoadConfigFile(path string) (*Config, error)`
-  - [ ] 3.6 Write tests for environment variable loading
-  - [ ] 3.7 Implement `LoadEnvConfig() *Config` for `PROW_HELPER_DEST` and `PROW_HELPER_ANALYZE_CMD`
-  - [ ] 3.8 Write tests for configuration merging with priority order
-  - [ ] 3.9 Implement `MergeConfig(cli, env, file, defaults *Config) *Config` with priority: CLI > Env > File > Defaults
+- [x] 3.0 Configuration System
+  - [x] 3.1 Define `Config` struct with fields: `Dest`, `AnalyzeCmd`
+  - [x] 3.2 Write tests for XDG config file path resolution
+  - [x] 3.3 Implement `GetConfigPath() string` using XDG Base Directory Specification
+  - [x] 3.4 Write tests for YAML config file loading
+  - [x] 3.5 Implement `LoadConfigFile(path string) (*Config, error)`
+  - [x] 3.6 Write tests for environment variable loading
+  - [x] 3.7 Implement `LoadEnvConfig() *Config` for `PROW_HELPER_DEST` and `PROW_HELPER_ANALYZE_CMD`
+  - [x] 3.8 Write tests for configuration merging with priority order
+  - [x] 3.9 Implement `MergeConfig(cli, env, file, defaults *Config) *Config` with priority: CLI > Env > File > Defaults
 
 - [ ] 4.0 Artifact Download
   - [ ] 4.1 Write tests for destination path construction (`<dest>/<job-name>/<build-id>/`)
