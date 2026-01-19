@@ -6,7 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS=-ldflags "-X main.Version=$(VERSION)"
 
 build:
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/prow-helper
+	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) .
 
 test:
 	go test -v ./...
