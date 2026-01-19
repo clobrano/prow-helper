@@ -39,13 +39,13 @@ Generated from: `prd-prow-artifact-analyzer.md`
   - [x] 1.3 Add dependencies: `cobra` (CLI), `yaml.v3` (config parsing), `adrg/xdg` (XDG paths), `gen2brain/beeep` (notifications)
   - [x] 1.4 Create `Makefile` with targets: `build`, `test`, `install`, `clean`
 
-- [ ] 2.0 URL Parsing & Validation
-  - [ ] 2.1 Write tests for PROW URL validation (valid URLs, invalid formats, edge cases)
-  - [ ] 2.2 Implement `ValidateURL(url string) error` function
-  - [ ] 2.3 Write tests for metadata extraction (bucket, path, job name, build ID)
-  - [ ] 2.4 Implement `ParseURL(url string) (*ProwMetadata, error)` returning structured metadata
-  - [ ] 2.5 Write tests for gsutil command construction
-  - [ ] 2.6 Implement `BuildGsutilCommand(metadata *ProwMetadata, dest string) string`
+- [x] 2.0 URL Parsing & Validation
+  - [x] 2.1 Write tests for PROW URL validation (valid URLs, invalid formats, edge cases)
+  - [x] 2.2 Implement `ValidateURL(url string) error` function
+  - [x] 2.3 Write tests for metadata extraction (bucket, path, job name, build ID)
+  - [x] 2.4 Implement `ParseURL(url string) (*ProwMetadata, error)` returning structured metadata
+  - [x] 2.5 Write tests for gsutil command construction
+  - [x] 2.6 Implement `BuildGsutilCommand(metadata *ProwMetadata, dest string) string`
 
 - [ ] 3.0 Configuration System
   - [ ] 3.1 Define `Config` struct with fields: `Dest`, `AnalyzeCmd`
