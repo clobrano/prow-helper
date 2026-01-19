@@ -80,12 +80,12 @@ Generated from: `prd-prow-artifact-analyzer.md`
   - [x] 5.5 Write tests for error handling (non-zero exit code)
   - [x] 5.6 Implement proper error propagation with exit code information
 
-- [ ] 6.0 Background Execution & Notifications
-  - [ ] 6.1 Write tests for notification message formatting
-  - [ ] 6.2 Implement `Notify(title, message string, success bool) error` using beeep or notify-send fallback
-  - [ ] 6.3 Implement `--background` flag that forks process and returns immediately
-  - [ ] 6.4 Integrate notification calls for success and failure scenarios
-  - [ ] 6.5 Ensure notification includes job name and status
+- [x] 6.0 Background Execution & Notifications
+  - [x] 6.1 Write tests for notification message formatting
+  - [x] 6.2 Implement `Notify(title, message string, success bool) error` using beeep or notify-send fallback
+  - [x] 6.3 Implement `--background` flag that forks process and returns immediately
+  - [x] 6.4 Integrate notification calls for success and failure scenarios
+  - [x] 6.5 Ensure notification includes job name and status
 
 - [ ] 7.0 CLI Interface & Main Orchestration
   - [ ] 7.1 Set up cobra root command in `cmd/prow-helper/root.go`
