@@ -27,9 +27,10 @@ const (
 
 var (
 	// CLI flags
-	flagDest       string
-	flagAnalyzeCmd string
-	flagBackground bool
+	flagDest           string
+	flagAnalyzeCmd     string
+	flagBackground     bool
+	flagNotifyComplete bool // Internal flag set by background mode
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -57,6 +58,8 @@ func init() {
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
 	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run after download")
 	rootCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background and notify when done")
+	rootCmd.Flags().BoolVar(&flagNotifyComplete, "notify-on-complete", false, "Internal flag for background mode notifications")
+	rootCmd.Flags().MarkHidden("notify-on-complete") // Hide from help output
 	rootCmd.Version = Version
 }
 
@@ -75,7 +78,7 @@ func runMain(cmd *cobra.Command, args []string) error {
 		return runInBackground(os.Args)
 	}
 
-	return executeWorkflow(prowURL, false)
+	return executeWorkflow(prowURL, flagNotifyComplete)
 }
 
 // runInBackground forks the current process to run in background
@@ -115,13 +118,6 @@ func runInBackground(args []string) error {
 
 // executeWorkflow runs the main download and analysis workflow
 func executeWorkflow(prowURL string, sendNotification bool) error {
-	// Check for --notify-on-complete flag (set by background mode)
-	for _, arg := range os.Args {
-		if arg == "--notify-on-complete" {
-			sendNotification = true
-			break
-		}
-	}
 
 	// Step 1: Validate URL
 	if err := parser.ValidateURL(prowURL); err != nil {
