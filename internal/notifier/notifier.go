@@ -58,3 +58,18 @@ func FormatAnalysisSuccessMessage(jobName, destPath string) string {
 func FormatDownloadOnlyMessage(jobName, destPath string) string {
 	return fmt.Sprintf("Download complete for:\n%s\n\nArtifacts: %s", jobName, destPath)
 }
+
+// FormatDownloadStartMessage creates a message when download is starting.
+func FormatDownloadStartMessage(jobName string) string {
+	return fmt.Sprintf("Starting download for:\n%s", jobName)
+}
+
+// FormatDownloadCompleteMessage creates a message when download completes (intermediate step).
+func FormatDownloadCompleteMessage(jobName, destPath string) string {
+	return fmt.Sprintf("Download complete for:\n%s\n\nStarting analysis...", jobName)
+}
+
+// FormatAnalysisStartMessage creates a message when analysis is starting.
+func FormatAnalysisStartMessage(jobName, analyzeCmd string) string {
+	return fmt.Sprintf("Starting analysis for:\n%s\n\nCommand: %s", jobName, analyzeCmd)
+}
