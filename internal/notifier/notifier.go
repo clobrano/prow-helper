@@ -7,6 +7,11 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
+func init() {
+	// Set the application name for notifications
+	beeep.AppName = "prow-helper"
+}
+
 // Notify sends a desktop notification with the given title and message.
 // Uses beeep library which supports Linux (notify-send), macOS, and Windows.
 // If beeep fails, falls back to notify-send command directly.
@@ -18,7 +23,7 @@ func Notify(title, message string, success bool) error {
 	}
 	fullTitle := fmt.Sprintf("prow-helper: %s - %s", title, statusIcon)
 
-	// Try beeep first
+	// Try beeep first (AppName is set in init())
 	err := beeep.Notify(fullTitle, message, "")
 	if err == nil {
 		return nil
