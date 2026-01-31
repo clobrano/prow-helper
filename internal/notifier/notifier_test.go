@@ -57,5 +57,44 @@ func TestFormatDownloadOnlyMessage(t *testing.T) {
 	}
 }
 
+func TestFormatDownloadStartMessage(t *testing.T) {
+	msg := FormatDownloadStartMessage("test-job")
+
+	if !strings.Contains(msg, "test-job") {
+		t.Error("FormatDownloadStartMessage should contain job name")
+	}
+	if !strings.Contains(msg, "Starting download") {
+		t.Error("FormatDownloadStartMessage should mention starting download")
+	}
+}
+
+func TestFormatDownloadCompleteMessage(t *testing.T) {
+	msg := FormatDownloadCompleteMessage("test-job", "/path/to/artifacts")
+
+	if !strings.Contains(msg, "test-job") {
+		t.Error("FormatDownloadCompleteMessage should contain job name")
+	}
+	if !strings.Contains(msg, "Download complete") {
+		t.Error("FormatDownloadCompleteMessage should mention download complete")
+	}
+	if !strings.Contains(msg, "Starting analysis") {
+		t.Error("FormatDownloadCompleteMessage should mention starting analysis")
+	}
+}
+
+func TestFormatAnalysisStartMessage(t *testing.T) {
+	msg := FormatAnalysisStartMessage("test-job", "my-analyzer")
+
+	if !strings.Contains(msg, "test-job") {
+		t.Error("FormatAnalysisStartMessage should contain job name")
+	}
+	if !strings.Contains(msg, "my-analyzer") {
+		t.Error("FormatAnalysisStartMessage should contain analyze command")
+	}
+	if !strings.Contains(msg, "Starting analysis") {
+		t.Error("FormatAnalysisStartMessage should mention starting analysis")
+	}
+}
+
 // Note: We don't test Notify() directly as it interacts with system notifications
 // Integration tests should verify notification delivery manually

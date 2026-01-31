@@ -7,6 +7,11 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
+func init() {
+	// Set the application name for notifications
+	beeep.AppName = "prow-helper"
+}
+
 // Notify sends a desktop notification with the given title and message.
 // Uses beeep library which supports Linux (notify-send), macOS, and Windows.
 // If beeep fails, falls back to notify-send command directly.
@@ -18,7 +23,7 @@ func Notify(title, message string, success bool) error {
 	}
 	fullTitle := fmt.Sprintf("prow-helper: %s - %s", title, statusIcon)
 
-	// Try beeep first
+	// Try beeep first (AppName is set in init())
 	err := beeep.Notify(fullTitle, message, "")
 	if err == nil {
 		return nil
@@ -52,4 +57,19 @@ func FormatAnalysisSuccessMessage(jobName, destPath string) string {
 // FormatDownloadOnlyMessage creates a message when only download was performed.
 func FormatDownloadOnlyMessage(jobName, destPath string) string {
 	return fmt.Sprintf("Download complete for:\n%s\n\nArtifacts: %s", jobName, destPath)
+}
+
+// FormatDownloadStartMessage creates a message when download is starting.
+func FormatDownloadStartMessage(jobName string) string {
+	return fmt.Sprintf("Starting download for:\n%s", jobName)
+}
+
+// FormatDownloadCompleteMessage creates a message when download completes (intermediate step).
+func FormatDownloadCompleteMessage(jobName, destPath string) string {
+	return fmt.Sprintf("Download complete for:\n%s\n\nStarting analysis...", jobName)
+}
+
+// FormatAnalysisStartMessage creates a message when analysis is starting.
+func FormatAnalysisStartMessage(jobName, analyzeCmd string) string {
+	return fmt.Sprintf("Starting analysis for:\n%s\n\nCommand: %s", jobName, analyzeCmd)
 }

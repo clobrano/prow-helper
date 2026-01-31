@@ -180,6 +180,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		// Step 5: Download artifacts
 		fmt.Printf("Downloading to: %s\n", destPath)
 
+		// Notify download start in background mode
+		if sendNotification {
+			notifier.Notify(metadata.JobName, notifier.FormatDownloadStartMessage(metadata.JobName), true)
+		}
+
 		gcsPath := "gs://" + metadata.Bucket + "/" + metadata.Path
 		if err := downloader.Download(gcsPath, destPath, os.Stdout, os.Stderr); err != nil {
 			errMsg := fmt.Sprintf("Download failed: %v", err)
@@ -202,11 +207,21 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			fmt.Printf("Renamed folder to: %s\n", newDestPath)
 			destPath = newDestPath // Update destPath for analysis
 		}
+
+		// Notify download complete in background mode (only if we will run analysis)
+		if sendNotification && cfg.AnalyzeCmd != "" {
+			notifier.Notify(metadata.JobName, notifier.FormatDownloadCompleteMessage(metadata.JobName, destPath), true)
+		}
 	}
 
 	// Step 6: Run analysis command if configured
 	if cfg.AnalyzeCmd != "" {
 		fmt.Printf("Running analysis: %s %s\n", cfg.AnalyzeCmd, destPath)
+
+		// Notify analysis start in background mode
+		if sendNotification {
+			notifier.Notify(metadata.JobName, notifier.FormatAnalysisStartMessage(metadata.JobName, cfg.AnalyzeCmd), true)
+		}
 
 		if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
 			var exitErr *analyzer.ExitError
