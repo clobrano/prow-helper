@@ -99,24 +99,43 @@ func Watch(metadata *parser.ProwMetadata, interval time.Duration, w io.Writer) (
 	fmt.Fprintf(w, "Job is running, waiting for completion...\n")
 	output.PrintStatus(w, output.StatusRunning)
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	checkTicker := time.NewTicker(interval)
+	defer checkTicker.Stop()
+	countdownTicker := time.NewTicker(time.Second)
+	defer countdownTicker.Stop()
 
-	for range ticker.C {
-		fmt.Fprintf(w, "[%s] Checking job status...\n", time.Now().Format(time.RFC3339))
+	lastCheckTime := time.Now()
+	nextCheckTime := lastCheckTime.Add(interval)
+	printCountdown(w, lastCheckTime, nextCheckTime)
 
-		status, err := CheckJobStatus(finishedURL)
-		if err != nil {
-			fmt.Fprintf(w, "Warning: %v\n", err)
-			continue
-		}
+	for {
+		select {
+		case t := <-checkTicker.C:
+			status, err := CheckJobStatus(finishedURL)
+			if err != nil {
+				fmt.Fprintf(w, "\r%-80s\n", fmt.Sprintf("Warning: %v", err))
+			} else if status != nil {
+				fmt.Fprintf(w, "\r%-80s\n", "Job completed!")
+				return status, nil
+			}
+			lastCheckTime = t
+			nextCheckTime = t.Add(interval)
+			printCountdown(w, lastCheckTime, nextCheckTime)
 
-		if status != nil {
-			fmt.Fprintf(w, "Job completed!\n")
-			return status, nil
+		case <-countdownTicker.C:
+			printCountdown(w, lastCheckTime, nextCheckTime)
 		}
 	}
+}
 
-	// This should never be reached
-	return nil, fmt.Errorf("watch loop unexpectedly terminated")
+// printCountdown overwrites the current terminal line with the last check time
+// and a live countdown to the next check.
+func printCountdown(w io.Writer, lastCheck, nextCheck time.Time) {
+	timeLeft := time.Until(nextCheck).Truncate(time.Second)
+	if timeLeft < 0 {
+		timeLeft = 0
+	}
+	fmt.Fprintf(w, "\r%-80s", fmt.Sprintf("[last check: %s] [next check in: %s]",
+		lastCheck.Format("15:04:05"),
+		timeLeft))
 }
