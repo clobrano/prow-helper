@@ -13,6 +13,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/config"
 	"github.com/clobrano/prow-helper/internal/downloader"
 	"github.com/clobrano/prow-helper/internal/notifier"
+	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
@@ -153,8 +154,8 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		return nil
 	}
 
-	fmt.Printf("Job: %s\n", metadata.JobName)
-	fmt.Printf("Build ID: %s\n", metadata.BuildID)
+	output.PrintField(os.Stdout, "Job", metadata.JobName)
+	output.PrintField(os.Stdout, "Build ID", metadata.BuildID)
 
 	// Step 3: Load configuration
 	cliConfig := &config.Config{
@@ -187,24 +188,24 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 		if !status.Passed {
 			// Job failed
-			msg := notifier.FormatJobStatusMessage(metadata.JobName, false)
+			msg := output.FormatJobStatusMessage(metadata.JobName, false)
 			fmt.Println(msg)
 
 			// If no analyze command, just notify and exit
 			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(metadata.JobName, msg, false, cfg.NtfyChannel)
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, false), false, cfg.NtfyChannel)
 				os.Exit(ExitJobFailed)
 				return nil
 			}
 			// If analyze command is set, continue to download artifacts for analysis
 		} else {
 			// Job passed
-			msg := notifier.FormatJobStatusMessage(metadata.JobName, true)
+			msg := output.FormatJobStatusMessage(metadata.JobName, true)
 			fmt.Println(msg)
 
 			// If no analyze command, just notify and exit
 			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(metadata.JobName, msg, true, cfg.NtfyChannel)
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, true), true, cfg.NtfyChannel)
 				return nil
 			}
 			// If analyze command is set, continue to download artifacts for analysis
@@ -227,7 +228,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		fmt.Println("Skipping download, using existing artifacts")
 	} else {
 		// Step 6: Download artifacts
-		fmt.Printf("Downloading to: %s\n", destPath)
+		output.PrintField(os.Stdout, "Downloading to", destPath)
 
 		// Notify download start in background mode
 		if sendNotification {
@@ -265,7 +266,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 	// Step 7: Run analysis command if configured
 	if cfg.AnalyzeCmd != "" {
-		fmt.Printf("Running analysis: %s %s\n", cfg.AnalyzeCmd, destPath)
+		output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
 
 		// Notify analysis start in background mode
 		if sendNotification {

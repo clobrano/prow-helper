@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
 )
 
@@ -77,13 +78,13 @@ func CheckJobStatus(finishedURL string) (*JobStatus, error) {
 // Watch polls the job status until the job completes.
 // It checks finished.json at the specified interval until the job finishes.
 // Returns the final job status when complete.
-func Watch(metadata *parser.ProwMetadata, interval time.Duration, output io.Writer) (*JobStatus, error) {
+func Watch(metadata *parser.ProwMetadata, interval time.Duration, w io.Writer) (*JobStatus, error) {
 	finishedURL := BuildFinishedJSONURL(metadata)
 
-	fmt.Fprintf(output, "Watching job: %s\n", metadata.JobName)
-	fmt.Fprintf(output, "Build ID: %s\n", metadata.BuildID)
-	fmt.Fprintf(output, "Polling interval: %s\n", interval)
-	fmt.Fprintf(output, "Checking: %s\n", finishedURL)
+	output.PrintField(w, "Watching job", metadata.JobName)
+	output.PrintField(w, "Build ID", metadata.BuildID)
+	output.PrintField(w, "Polling interval", interval.String())
+	output.PrintField(w, "Checking", finishedURL)
 
 	// Check immediately first
 	status, err := CheckJobStatus(finishedURL)
@@ -91,26 +92,27 @@ func Watch(metadata *parser.ProwMetadata, interval time.Duration, output io.Writ
 		return nil, err
 	}
 	if status != nil {
-		fmt.Fprintf(output, "Job already finished\n")
+		fmt.Fprintf(w, "Job already finished\n")
 		return status, nil
 	}
 
-	fmt.Fprintf(output, "Job is running, waiting for completion...\n")
+	fmt.Fprintf(w, "Job is running, waiting for completion...\n")
+	output.PrintStatus(w, output.StatusRunning)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		fmt.Fprintf(output, "[%s] Checking job status...\n", time.Now().Format(time.RFC3339))
+		fmt.Fprintf(w, "[%s] Checking job status...\n", time.Now().Format(time.RFC3339))
 
 		status, err := CheckJobStatus(finishedURL)
 		if err != nil {
-			fmt.Fprintf(output, "Warning: %v\n", err)
+			fmt.Fprintf(w, "Warning: %v\n", err)
 			continue
 		}
 
 		if status != nil {
-			fmt.Fprintf(output, "Job completed!\n")
+			fmt.Fprintf(w, "Job completed!\n")
 			return status, nil
 		}
 	}
