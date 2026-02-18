@@ -175,6 +175,10 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		return nil
 	}
 
+	if cfg.NtfyChannel != "" {
+		output.PrintField(os.Stdout, "Ntfy channel", cfg.NtfyChannel)
+	}
+
 	// Step 4: If watch mode, poll until job completes
 	if flagWatch {
 		status, err := watcher.Watch(metadata, watcher.DefaultPollInterval, os.Stdout)
