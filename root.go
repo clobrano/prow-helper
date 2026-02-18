@@ -13,7 +13,9 @@ import (
 	"github.com/clobrano/prow-helper/internal/config"
 	"github.com/clobrano/prow-helper/internal/downloader"
 	"github.com/clobrano/prow-helper/internal/notifier"
+	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
+	"github.com/clobrano/prow-helper/internal/watcher"
 )
 
 // Exit codes
@@ -23,6 +25,8 @@ const (
 	ExitDownloadFailed = 2
 	ExitAnalysisFailed = 3
 	ExitConfigError    = 4
+	ExitWatchFailed    = 5
+	ExitJobFailed      = 6
 )
 
 var (
@@ -31,6 +35,8 @@ var (
 	flagAnalyzeCmd     string
 	flagBackground     bool
 	flagNotifyComplete bool // Internal flag set by background mode
+	flagWatch          bool
+	flagNtfyChannel    string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -49,7 +55,11 @@ Example:
 
   prow-helper --dest ~/artifacts --analyze-cmd "my-analyzer" <url>
 
-  prow-helper --background <url>`,
+  prow-helper --background <url>
+
+  prow-helper --watch <url>
+
+  prow-helper --watch --ntfy-channel my-channel <url>`,
 	Args: cobra.ExactArgs(1),
 	RunE: runMain,
 }
@@ -60,6 +70,8 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background and notify when done")
 	rootCmd.Flags().BoolVar(&flagNotifyComplete, "notify-on-complete", false, "Internal flag for background mode notifications")
 	rootCmd.Flags().MarkHidden("notify-on-complete") // Hide from help output
+	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Poll job status until completion before downloading")
+	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
 	rootCmd.Version = Version
 }
 
@@ -142,13 +154,14 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		return nil
 	}
 
-	fmt.Printf("Job: %s\n", metadata.JobName)
-	fmt.Printf("Build ID: %s\n", metadata.BuildID)
+	output.PrintField(os.Stdout, "Job", metadata.JobName)
+	output.PrintField(os.Stdout, "Build ID", metadata.BuildID)
 
 	// Step 3: Load configuration
 	cliConfig := &config.Config{
-		Dest:       flagDest,
-		AnalyzeCmd: flagAnalyzeCmd,
+		Dest:        flagDest,
+		AnalyzeCmd:  flagAnalyzeCmd,
+		NtfyChannel: flagNtfyChannel,
 	}
 
 	cfg, err := config.Load(cliConfig)
@@ -162,7 +175,44 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		return nil
 	}
 
-	// Step 4: Resolve destination with conflict handling
+	// Step 4: If watch mode, poll until job completes
+	if flagWatch {
+		status, err := watcher.Watch(metadata, watcher.DefaultPollInterval, os.Stdout)
+		if err != nil {
+			errMsg := fmt.Sprintf("Watch failed: %v", err)
+			fmt.Fprintln(os.Stderr, errMsg)
+			sendNotificationWithConfig(metadata.JobName, errMsg, false, cfg.NtfyChannel)
+			os.Exit(ExitWatchFailed)
+			return nil
+		}
+
+		if !status.Passed {
+			// Job failed
+			msg := output.FormatJobStatusMessage(metadata.JobName, false)
+			fmt.Println(msg)
+
+			// If no analyze command, just notify and exit
+			if cfg.AnalyzeCmd == "" {
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, false), false, cfg.NtfyChannel)
+				os.Exit(ExitJobFailed)
+				return nil
+			}
+			// If analyze command is set, continue to download artifacts for analysis
+		} else {
+			// Job passed
+			msg := output.FormatJobStatusMessage(metadata.JobName, true)
+			fmt.Println(msg)
+
+			// If no analyze command, just notify and exit
+			if cfg.AnalyzeCmd == "" {
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, true), true, cfg.NtfyChannel)
+				return nil
+			}
+			// If analyze command is set, continue to download artifacts for analysis
+		}
+	}
+
+	// Step 5: Resolve destination with conflict handling
 	destPath, skip, err := downloader.ResolveDestination(cfg.Dest, metadata, os.Stdin, os.Stdout)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to resolve destination: %v", err)
@@ -177,8 +227,8 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	if skip {
 		fmt.Println("Skipping download, using existing artifacts")
 	} else {
-		// Step 5: Download artifacts
-		fmt.Printf("Downloading to: %s\n", destPath)
+		// Step 6: Download artifacts
+		output.PrintField(os.Stdout, "Downloading to", destPath)
 
 		// Notify download start in background mode
 		if sendNotification {
@@ -190,7 +240,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			errMsg := fmt.Sprintf("Download failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
 			if sendNotification {
-				notifier.Notify(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false)
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel)
 			}
 			os.Exit(ExitDownloadFailed)
 			return nil
@@ -214,9 +264,9 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		}
 	}
 
-	// Step 6: Run analysis command if configured
+	// Step 7: Run analysis command if configured
 	if cfg.AnalyzeCmd != "" {
-		fmt.Printf("Running analysis: %s %s\n", cfg.AnalyzeCmd, destPath)
+		output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
 
 		// Notify analysis start in background mode
 		if sendNotification {
@@ -229,7 +279,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 				errMsg := fmt.Sprintf("Analysis failed with exit code %d", exitErr.ExitCode)
 				fmt.Fprintln(os.Stderr, errMsg)
 				if sendNotification {
-					notifier.Notify(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false)
+					sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel)
 				}
 				os.Exit(ExitAnalysisFailed)
 				return nil
@@ -238,7 +288,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			errMsg := fmt.Sprintf("Analysis failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
 			if sendNotification {
-				notifier.Notify(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false)
+				sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel)
 			}
 			os.Exit(ExitAnalysisFailed)
 			return nil
@@ -247,15 +297,24 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		fmt.Println("Analysis complete!")
 
 		if sendNotification {
-			notifier.Notify(metadata.JobName, notifier.FormatAnalysisSuccessMessage(metadata.JobName, destPath), true)
+			sendNotificationWithConfig(metadata.JobName, notifier.FormatAnalysisSuccessMessage(metadata.JobName, destPath), true, cfg.NtfyChannel)
 		}
 	} else {
 		if sendNotification {
-			notifier.Notify(metadata.JobName, notifier.FormatDownloadOnlyMessage(metadata.JobName, destPath), true)
+			sendNotificationWithConfig(metadata.JobName, notifier.FormatDownloadOnlyMessage(metadata.JobName, destPath), true, cfg.NtfyChannel)
 		}
 	}
 
 	return nil
+}
+
+// sendNotificationWithConfig sends notifications using configured methods
+func sendNotificationWithConfig(title, message string, success bool, ntfyChannel string) {
+	if ntfyChannel != "" {
+		notifier.NotifyWithConfig(title, message, success, ntfyChannel)
+	} else {
+		notifier.Notify(title, message, success)
+	}
 }
 
 // For testing: allow overriding exec.Command

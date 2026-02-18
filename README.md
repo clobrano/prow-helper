@@ -23,6 +23,8 @@ Analyzing PROW test results typically requires multiple manual steps:
 - **Flexible Configuration**: CLI flags, environment variables, and config file support
 - **AI Analysis Integration**: Run Claude, Gemini, or other AI tools on downloaded artifacts
 - **Background Processing**: Fork to background and receive desktop notification on completion
+- **Watch Mode**: Poll running jobs until completion, then automatically download artifacts
+- **ntfy.sh Notifications**: Receive push notifications on mobile devices via [ntfy.sh](https://ntfy.sh)
 
 ## Installation
 
@@ -65,6 +67,15 @@ prow-helper --analyze-cmd "claude 'analyze the Prow test artifacts contained in 
 # Run in background with notification
 prow-helper --background <url>
 
+# Watch a running job until completion
+prow-helper --watch <url>
+
+# Watch job and analyze when complete
+prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
+
+# Watch with ntfy.sh notifications (for mobile alerts)
+prow-helper --watch --ntfy-channel my-channel <url>
+
 # Combine options
 prow-helper --dest ~/artifacts --analyze-cmd "claude 'analyze these test failures'" --background <url>
 ```
@@ -76,6 +87,8 @@ prow-helper --dest ~/artifacts --analyze-cmd "claude 'analyze these test failure
 | `--dest` | Download destination directory (supports `~/` expansion) |
 | `--analyze-cmd` | Command to run after download (receives artifact path as argument) |
 | `--background` | Run in background and notify on completion |
+| `--watch` | Poll job status until completion before downloading |
+| `--ntfy-channel` | ntfy.sh channel for push notifications |
 | `--help` | Display help information |
 | `--version` | Display version information |
 
@@ -91,6 +104,9 @@ dest: ~/prow-artifacts
 
 # Command to run after download (artifact path appended as last argument)
 analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
+
+# ntfy.sh channel for push notifications (optional)
+ntfy_channel: my-prow-notifications
 ```
 
 ### Environment Variables
@@ -98,6 +114,7 @@ analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
 ```bash
 export PROW_HELPER_DEST=~/my-artifacts
 export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
+export NTFY_CHANNEL=my-prow-notifications
 ```
 
 ### Configuration Priority
@@ -116,6 +133,8 @@ export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
 | 2 | Download failed |
 | 3 | Analysis failed |
 | 4 | Configuration error |
+| 5 | Watch polling failed |
+| 6 | Job completed with failure |
 
 ## Examples
 
@@ -135,6 +154,36 @@ prow-helper "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/my
 ```bash
 prow-helper --background <url>
 # Returns immediately, notification appears when download completes
+```
+
+### Watch Mode
+
+Monitor a running job and get notified when it completes:
+
+```bash
+# Watch until job completes, then notify
+prow-helper --watch <url>
+
+# Watch, download artifacts, and run analysis when complete
+prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
+```
+
+The watch mode polls the job's `finished.json` every 15 minutes until the job completes.
+
+### ntfy.sh Push Notifications
+
+Receive notifications on your mobile device using [ntfy.sh](https://ntfy.sh):
+
+1. Install the ntfy app on your phone
+2. Subscribe to your chosen channel (e.g., `my-prow-notifications`)
+3. Use the channel with prow-helper:
+
+```bash
+# One-time use
+prow-helper --watch --ntfy-channel my-prow-notifications <url>
+
+# Or configure permanently
+echo "ntfy_channel: my-prow-notifications" >> ~/.config/prow-helper/config.yaml
 ```
 
 ### Handling Existing Folders

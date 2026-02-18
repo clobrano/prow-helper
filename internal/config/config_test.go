@@ -16,6 +16,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.AnalyzeCmd != "" {
 		t.Errorf("DefaultConfig().AnalyzeCmd = %v, want empty string", cfg.AnalyzeCmd)
 	}
+	if cfg.NtfyChannel != "" {
+		t.Errorf("DefaultConfig().NtfyChannel = %v, want empty string", cfg.NtfyChannel)
+	}
 }
 
 func TestGetConfigPath(t *testing.T) {
@@ -89,14 +92,17 @@ func TestLoadEnvConfig(t *testing.T) {
 	// Save original env values
 	origDest := os.Getenv("PROW_HELPER_DEST")
 	origCmd := os.Getenv("PROW_HELPER_ANALYZE_CMD")
+	origNtfy := os.Getenv("NTFY_CHANNEL")
 	defer func() {
 		os.Setenv("PROW_HELPER_DEST", origDest)
 		os.Setenv("PROW_HELPER_ANALYZE_CMD", origCmd)
+		os.Setenv("NTFY_CHANNEL", origNtfy)
 	}()
 
 	// Set test values
 	os.Setenv("PROW_HELPER_DEST", "/env/path")
 	os.Setenv("PROW_HELPER_ANALYZE_CMD", "env-command")
+	os.Setenv("NTFY_CHANNEL", "test-channel")
 
 	cfg := LoadEnvConfig()
 
@@ -106,20 +112,26 @@ func TestLoadEnvConfig(t *testing.T) {
 	if cfg.AnalyzeCmd != "env-command" {
 		t.Errorf("LoadEnvConfig().AnalyzeCmd = %v, want %v", cfg.AnalyzeCmd, "env-command")
 	}
+	if cfg.NtfyChannel != "test-channel" {
+		t.Errorf("LoadEnvConfig().NtfyChannel = %v, want %v", cfg.NtfyChannel, "test-channel")
+	}
 }
 
 func TestLoadEnvConfig_Empty(t *testing.T) {
 	// Save original env values
 	origDest := os.Getenv("PROW_HELPER_DEST")
 	origCmd := os.Getenv("PROW_HELPER_ANALYZE_CMD")
+	origNtfy := os.Getenv("NTFY_CHANNEL")
 	defer func() {
 		os.Setenv("PROW_HELPER_DEST", origDest)
 		os.Setenv("PROW_HELPER_ANALYZE_CMD", origCmd)
+		os.Setenv("NTFY_CHANNEL", origNtfy)
 	}()
 
 	// Unset values
 	os.Unsetenv("PROW_HELPER_DEST")
 	os.Unsetenv("PROW_HELPER_ANALYZE_CMD")
+	os.Unsetenv("NTFY_CHANNEL")
 
 	cfg := LoadEnvConfig()
 
@@ -128,6 +140,9 @@ func TestLoadEnvConfig_Empty(t *testing.T) {
 	}
 	if cfg.AnalyzeCmd != "" {
 		t.Errorf("LoadEnvConfig().AnalyzeCmd = %v, want empty string", cfg.AnalyzeCmd)
+	}
+	if cfg.NtfyChannel != "" {
+		t.Errorf("LoadEnvConfig().NtfyChannel = %v, want empty string", cfg.NtfyChannel)
 	}
 }
 
