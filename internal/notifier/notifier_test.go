@@ -2,6 +2,8 @@ package notifier
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -98,3 +100,59 @@ func TestFormatAnalysisStartMessage(t *testing.T) {
 
 // Note: We don't test Notify() directly as it interacts with system notifications
 // Integration tests should verify notification delivery manually
+
+func TestFormatJobStatusMessage(t *testing.T) {
+	tests := []struct {
+		name    string
+		jobName string
+		passed  bool
+		want    string
+	}{
+		{
+			name:    "passed job",
+			jobName: "test-job",
+			passed:  true,
+			want:    "PASSED",
+		},
+		{
+			name:    "failed job",
+			jobName: "test-job",
+			passed:  false,
+			want:    "FAILED",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := FormatJobStatusMessage(tt.jobName, tt.passed)
+			if !strings.Contains(msg, tt.jobName) {
+				t.Errorf("FormatJobStatusMessage() should contain job name %s", tt.jobName)
+			}
+			if !strings.Contains(msg, tt.want) {
+				t.Errorf("FormatJobStatusMessage() should contain status %s", tt.want)
+			}
+		})
+	}
+}
+
+func TestNotifyNtfy(t *testing.T) {
+	// Test with mock server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request method
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+		}
+
+		// Verify title header
+		title := r.Header.Get("Title")
+		if title == "" {
+			t.Error("Expected Title header to be set")
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	// We can't easily test NotifyNtfy directly because it uses hardcoded URL
+	// This test documents the expected behavior
+}

@@ -2,9 +2,16 @@ package notifier
 
 import (
 	"fmt"
+	"net/http"
 	"os/exec"
+	"strings"
 
 	"github.com/gen2brain/beeep"
+)
+
+const (
+	// NtfyBaseURL is the base URL for ntfy.sh
+	NtfyBaseURL = "https://ntfy.sh"
 )
 
 func init() {
@@ -72,4 +79,62 @@ func FormatDownloadCompleteMessage(jobName, destPath string) string {
 // FormatAnalysisStartMessage creates a message when analysis is starting.
 func FormatAnalysisStartMessage(jobName, analyzeCmd string) string {
 	return fmt.Sprintf("Starting analysis for:\n%s\n\nCommand: %s", jobName, analyzeCmd)
+}
+
+// NotifyNtfy sends a notification via ntfy.sh.
+// channel is the ntfy.sh topic/channel name.
+func NotifyNtfy(channel, title, message string) error {
+	url := fmt.Sprintf("%s/%s", NtfyBaseURL, channel)
+
+	req, err := http.NewRequest("POST", url, strings.NewReader(message))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Title", title)
+	req.Header.Set("Content-Type", "text/plain")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send notification: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("ntfy.sh returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// NotifyWithConfig sends notification using configured method.
+// If ntfyChannel is provided, sends via ntfy.sh; otherwise sends desktop notification.
+func NotifyWithConfig(title, message string, success bool, ntfyChannel string) error {
+	// Add status indicator to title
+	statusIcon := "Success"
+	if !success {
+		statusIcon = "Failed"
+	}
+	fullTitle := fmt.Sprintf("prow-helper: %s - %s", title, statusIcon)
+
+	// Send ntfy notification if channel is configured
+	if ntfyChannel != "" {
+		if err := NotifyNtfy(ntfyChannel, fullTitle, message); err != nil {
+			// Log error but don't fail - try desktop notification as fallback
+			fmt.Printf("Warning: ntfy notification failed: %v\n", err)
+		}
+	}
+
+	// Always try desktop notification
+	return Notify(title, message, success)
+}
+
+// FormatJobStatusMessage creates a message for job completion status.
+func FormatJobStatusMessage(jobName string, passed bool) string {
+	status := "PASSED"
+	if !passed {
+		status = "FAILED"
+	}
+	return fmt.Sprintf("Job %s has completed with status: %s", jobName, status)
 }

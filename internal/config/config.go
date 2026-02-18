@@ -10,15 +10,17 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	Dest       string `yaml:"dest"`        // Download destination directory
-	AnalyzeCmd string `yaml:"analyze_cmd"` // Command to run after download
+	Dest        string `yaml:"dest"`         // Download destination directory
+	AnalyzeCmd  string `yaml:"analyze_cmd"`  // Command to run after download
+	NtfyChannel string `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
 }
 
 // DefaultConfig returns a Config with default values.
 func DefaultConfig() *Config {
 	return &Config{
-		Dest:       ".",
-		AnalyzeCmd: "",
+		Dest:        ".",
+		AnalyzeCmd:  "",
+		NtfyChannel: "",
 	}
 }
 
@@ -50,8 +52,9 @@ func LoadConfigFile(path string) (*Config, error) {
 // LoadEnvConfig loads configuration from environment variables.
 func LoadEnvConfig() *Config {
 	return &Config{
-		Dest:       os.Getenv("PROW_HELPER_DEST"),
-		AnalyzeCmd: os.Getenv("PROW_HELPER_ANALYZE_CMD"),
+		Dest:        os.Getenv("PROW_HELPER_DEST"),
+		AnalyzeCmd:  os.Getenv("PROW_HELPER_ANALYZE_CMD"),
+		NtfyChannel: os.Getenv("NTFY_CHANNEL"),
 	}
 }
 
@@ -64,6 +67,7 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 	if defaults != nil {
 		result.Dest = defaults.Dest
 		result.AnalyzeCmd = defaults.AnalyzeCmd
+		result.NtfyChannel = defaults.NtfyChannel
 	}
 
 	// Override with file config
@@ -73,6 +77,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if file.AnalyzeCmd != "" {
 			result.AnalyzeCmd = file.AnalyzeCmd
+		}
+		if file.NtfyChannel != "" {
+			result.NtfyChannel = file.NtfyChannel
 		}
 	}
 
@@ -84,6 +91,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if env.AnalyzeCmd != "" {
 			result.AnalyzeCmd = env.AnalyzeCmd
 		}
+		if env.NtfyChannel != "" {
+			result.NtfyChannel = env.NtfyChannel
+		}
 	}
 
 	// Override with CLI config
@@ -93,6 +103,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if cli.AnalyzeCmd != "" {
 			result.AnalyzeCmd = cli.AnalyzeCmd
+		}
+		if cli.NtfyChannel != "" {
+			result.NtfyChannel = cli.NtfyChannel
 		}
 	}
 
