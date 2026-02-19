@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -308,7 +311,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 // resolveProwURL fetches the given URL and extracts a prow job link from the page.
 // If exactly one prow job link is found it is returned automatically.
-// If multiple are found they are listed and the first one is returned.
+// If multiple are found the user is prompted to select one.
 func resolveProwURL(pageURL string) (string, error) {
 	links, err := resolver.FindProwJobLinks(pageURL)
 	if err != nil {
@@ -320,16 +323,26 @@ func resolveProwURL(pageURL string) (string, error) {
 		return links[0], nil
 	}
 
-	// Multiple links found: list them all and use the first one
-	fmt.Printf("Found %d prow job links on page, using the first one:\n", len(links))
+	// Multiple links found: let the user choose
+	fmt.Printf("Found %d prow job links on page:\n", len(links))
 	for i, link := range links {
-		marker := "  "
-		if i == 0 {
-			marker = "* "
-		}
-		fmt.Printf("%s[%d] %s\n", marker, i+1, link)
+		fmt.Printf("  [%d] %s\n", i+1, link)
 	}
-	return links[0], nil
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("Select a link [1-%d]: ", len(links))
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("failed to read selection: %w", err)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(input))
+		if err != nil || n < 1 || n > len(links) {
+			fmt.Printf("Invalid selection, please enter a number between 1 and %d\n", len(links))
+			continue
+		}
+		return links[n-1], nil
+	}
 }
 
 // sendNotificationWithConfig sends notifications using configured methods.
