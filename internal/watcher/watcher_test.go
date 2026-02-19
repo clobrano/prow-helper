@@ -149,6 +149,100 @@ func TestCheckJobStatus_ServerError(t *testing.T) {
 	}
 }
 
+func TestBuildStartedJSONURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata *parser.ProwMetadata
+		want     string
+	}{
+		{
+			name: "standard URL",
+			metadata: &parser.ProwMetadata{
+				Bucket: "test-platform-results",
+				Path:   "logs/periodic-ci-test/12345",
+			},
+			want: "https://storage.googleapis.com/test-platform-results/logs/periodic-ci-test/12345/started.json",
+		},
+		{
+			name: "different bucket",
+			metadata: &parser.ProwMetadata{
+				Bucket: "origin-ci-test",
+				Path:   "pr-logs/pull/openshift_api/1234/test-job/5678",
+			},
+			want: "https://storage.googleapis.com/origin-ci-test/pr-logs/pull/openshift_api/1234/test-job/5678/started.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := BuildStartedJSONURL(tt.metadata)
+			if got != tt.want {
+				t.Errorf("BuildStartedJSONURL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFetchJobStartTime_Success(t *testing.T) {
+	expectedTime := time.Unix(1700000000, 0)
+	started := startedJSON{Timestamp: expectedTime.Unix()}
+	body, _ := json.Marshal(started)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	got, err := FetchJobStartTime(server.URL)
+	if err != nil {
+		t.Fatalf("FetchJobStartTime() error = %v", err)
+	}
+	if !got.Equal(expectedTime) {
+		t.Errorf("FetchJobStartTime() = %v, want %v", got, expectedTime)
+	}
+}
+
+func TestFetchJobStartTime_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	got, err := FetchJobStartTime(server.URL)
+	if err != nil {
+		t.Fatalf("FetchJobStartTime() unexpected error = %v", err)
+	}
+	if !got.IsZero() {
+		t.Errorf("FetchJobStartTime() should return zero time for 404, got %v", got)
+	}
+}
+
+func TestFetchJobStartTime_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("invalid json"))
+	}))
+	defer server.Close()
+
+	_, err := FetchJobStartTime(server.URL)
+	if err == nil {
+		t.Error("FetchJobStartTime() should return error for invalid JSON")
+	}
+}
+
+func TestFetchJobStartTime_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err := FetchJobStartTime(server.URL)
+	if err == nil {
+		t.Error("FetchJobStartTime() should return error for server error")
+	}
+}
+
 func TestWatch_AlreadyFinished(t *testing.T) {
 	finished := finishedJSON{
 		Timestamp: time.Now().Unix(),
