@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/clobrano/prow-helper/internal/output"
@@ -33,11 +34,22 @@ type finishedJSON struct {
 	Result    string `json:"result"`
 }
 
+// startedJSON represents the structure of started.json from Prow
+type startedJSON struct {
+	Timestamp int64 `json:"timestamp"`
+}
+
 // BuildFinishedJSONURL converts a Prow URL to the GCS finished.json URL.
 // Prow URL: https://prow.ci.openshift.org/view/gs/<bucket>/<path>
 // GCS URL:  https://storage.googleapis.com/<bucket>/<path>/finished.json
 func BuildFinishedJSONURL(metadata *parser.ProwMetadata) string {
 	return fmt.Sprintf("%s/%s/%s/finished.json", GCSBaseURL, metadata.Bucket, metadata.Path)
+}
+
+// BuildStartedJSONURL converts a Prow URL to the GCS started.json URL.
+// GCS URL: https://storage.googleapis.com/<bucket>/<path>/started.json
+func BuildStartedJSONURL(metadata *parser.ProwMetadata) string {
+	return fmt.Sprintf("%s/%s/%s/started.json", GCSBaseURL, metadata.Bucket, metadata.Path)
 }
 
 // CheckJobStatus fetches finished.json and returns the job status.
@@ -75,6 +87,40 @@ func CheckJobStatus(finishedURL string) (*JobStatus, error) {
 	}, nil
 }
 
+// FetchJobStartTime fetches started.json and returns the job start time.
+// Returns a zero time.Time if the file is not yet available (404).
+func FetchJobStartTime(startedURL string) (time.Time, error) {
+	resp, err := http.Get(startedURL)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to fetch started.json: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return time.Time{}, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return time.Time{}, fmt.Errorf("unexpected status code fetching started.json: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to read started.json body: %w", err)
+	}
+
+	var started startedJSON
+	if err := json.Unmarshal(body, &started); err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse started.json: %w", err)
+	}
+
+	if started.Timestamp == 0 {
+		return time.Time{}, nil
+	}
+
+	return time.Unix(started.Timestamp, 0), nil
+}
+
 // Watch polls the job status until the job completes.
 // It checks finished.json at the specified interval until the job finishes.
 // Returns the final job status when complete.
@@ -83,8 +129,21 @@ func Watch(metadata *parser.ProwMetadata, interval time.Duration, w io.Writer) (
 
 	output.PrintField(w, "Watching job", metadata.JobName)
 	output.PrintField(w, "Build ID", metadata.BuildID)
+	if metadata.RawURL != "" {
+		output.PrintField(w, "Job page", metadata.RawURL)
+	}
 	output.PrintField(w, "Polling interval", interval.String())
 	output.PrintField(w, "Checking", finishedURL)
+
+	// Fetch job start time from started.json (best-effort)
+	startedURL := BuildStartedJSONURL(metadata)
+	startTime, err := FetchJobStartTime(startedURL)
+	if err != nil {
+		fmt.Fprintf(w, "Note: could not fetch job start time: %v\n", err)
+	}
+	if !startTime.IsZero() {
+		output.PrintField(w, "Started at", startTime.Format("2006-01-02 15:04:05"))
+	}
 
 	// Check immediately first
 	status, err := CheckJobStatus(finishedURL)
@@ -106,36 +165,44 @@ func Watch(metadata *parser.ProwMetadata, interval time.Duration, w io.Writer) (
 
 	lastCheckTime := time.Now()
 	nextCheckTime := lastCheckTime.Add(interval)
-	printCountdown(w, lastCheckTime, nextCheckTime)
+	printCountdown(w, startTime, lastCheckTime, nextCheckTime)
 
 	for {
 		select {
 		case t := <-checkTicker.C:
 			status, err := CheckJobStatus(finishedURL)
 			if err != nil {
-				fmt.Fprintf(w, "\r%-80s\n", fmt.Sprintf("Warning: %v", err))
+				fmt.Fprintf(w, "\r%-100s\n", fmt.Sprintf("Warning: %v", err))
 			} else if status != nil {
-				fmt.Fprintf(w, "\r%-80s\n", "Job completed!")
+				fmt.Fprintf(w, "\r%-100s\n", "Job completed!")
 				return status, nil
 			}
 			lastCheckTime = t
 			nextCheckTime = t.Add(interval)
-			printCountdown(w, lastCheckTime, nextCheckTime)
+			printCountdown(w, startTime, lastCheckTime, nextCheckTime)
 
 		case <-countdownTicker.C:
-			printCountdown(w, lastCheckTime, nextCheckTime)
+			printCountdown(w, startTime, lastCheckTime, nextCheckTime)
 		}
 	}
 }
 
-// printCountdown overwrites the current terminal line with the last check time
-// and a live countdown to the next check.
-func printCountdown(w io.Writer, lastCheck, nextCheck time.Time) {
+// printCountdown overwrites the current terminal line with elapsed time since
+// the job started, the last check time, and a live countdown to the next check.
+func printCountdown(w io.Writer, startTime, lastCheck, nextCheck time.Time) {
 	timeLeft := time.Until(nextCheck).Truncate(time.Second)
 	if timeLeft < 0 {
 		timeLeft = 0
 	}
-	fmt.Fprintf(w, "\r%-80s", fmt.Sprintf("[last check: %s] [next check in: %s]",
-		lastCheck.Format("15:04:05"),
-		timeLeft))
+
+	var parts []string
+	if !startTime.IsZero() {
+		elapsed := time.Since(startTime).Truncate(time.Second)
+		parts = append(parts, fmt.Sprintf("[started: %s]", startTime.Format("15:04:05")))
+		parts = append(parts, fmt.Sprintf("[running for: %s]", elapsed))
+	}
+	parts = append(parts, fmt.Sprintf("[last check: %s]", lastCheck.Format("15:04:05")))
+	parts = append(parts, fmt.Sprintf("[next check in: %s]", timeLeft))
+
+	fmt.Fprintf(w, "\r%-100s", strings.Join(parts, " "))
 }
