@@ -15,6 +15,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
+	"github.com/clobrano/prow-helper/internal/resolver"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
 
@@ -131,15 +132,20 @@ func runInBackground(args []string) error {
 // executeWorkflow runs the main download and analysis workflow
 func executeWorkflow(prowURL string, sendNotification bool) error {
 
-	// Step 1: Validate URL
+	// Step 1: Validate URL; if not a direct prow URL, try to resolve it from the page
 	if err := parser.ValidateURL(prowURL); err != nil {
-		errMsg := fmt.Sprintf("Invalid PROW URL: %v\nExpected format: https://prow.ci.openshift.org/view/gs/<bucket>/<path>", err)
-		fmt.Fprintln(os.Stderr, errMsg)
-		if sendNotification {
-			notifier.Notify("URL Validation", errMsg, false)
+		fmt.Fprintf(os.Stdout, "Not a direct prow URL (%v), attempting to find prow job link on page...\n", err)
+		resolved, resolveErr := resolveProwURL(prowURL)
+		if resolveErr != nil {
+			errMsg := fmt.Sprintf("Invalid PROW URL and could not resolve prow job link: %v", resolveErr)
+			fmt.Fprintln(os.Stderr, errMsg)
+			if sendNotification {
+				notifier.Notify("URL Validation", errMsg, false)
+			}
+			os.Exit(ExitInvalidURL)
+			return nil
 		}
-		os.Exit(ExitInvalidURL)
-		return nil
+		prowURL = resolved
 	}
 
 	// Step 2: Parse URL to get metadata
@@ -298,6 +304,32 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 
 	return nil
+}
+
+// resolveProwURL fetches the given URL and extracts a prow job link from the page.
+// If exactly one prow job link is found it is returned automatically.
+// If multiple are found they are listed and the first one is returned.
+func resolveProwURL(pageURL string) (string, error) {
+	links, err := resolver.FindProwJobLinks(pageURL)
+	if err != nil {
+		return "", err
+	}
+
+	if len(links) == 1 {
+		fmt.Printf("Found prow job link: %s\n", links[0])
+		return links[0], nil
+	}
+
+	// Multiple links found: list them all and use the first one
+	fmt.Printf("Found %d prow job links on page, using the first one:\n", len(links))
+	for i, link := range links {
+		marker := "  "
+		if i == 0 {
+			marker = "* "
+		}
+		fmt.Printf("%s[%d] %s\n", marker, i+1, link)
+	}
+	return links[0], nil
 }
 
 // sendNotificationWithConfig sends notifications using configured methods.
