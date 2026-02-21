@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,7 +40,6 @@ var (
 	flagNotifyComplete bool // Internal flag set by background mode
 	flagWatch          bool
 	flagNtfyChannel    string
-	flagInteractive    bool
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -77,7 +75,6 @@ func init() {
 	rootCmd.Flags().MarkHidden("notify-on-complete") // Hide from help output
 	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Poll job status until completion before downloading")
 	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
-	rootCmd.Flags().BoolVar(&flagInteractive, "interactive", false, "Run the analysis command in the current shell (exec replaces process)")
 	rootCmd.Version = Version
 }
 
@@ -173,7 +170,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		Dest:        flagDest,
 		AnalyzeCmd:  flagAnalyzeCmd,
 		NtfyChannel: flagNtfyChannel,
-		Interactive: flagInteractive,
 	}
 
 	cfg, err := config.Load(cliConfig)
@@ -285,16 +281,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			sendNotificationWithConfig(metadata.JobName, notifier.FormatAnalysisStartMessage(metadata.JobName, cfg.AnalyzeCmd), true, cfg.NtfyChannel, sendNotification)
 		}
 
-		if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath, cfg.Interactive); err != nil {
-			var exitErr *analyzer.ExitError
-			if errors.As(err, &exitErr) {
-				errMsg := fmt.Sprintf("Analysis failed with exit code %d", exitErr.ExitCode)
-				fmt.Fprintln(os.Stderr, errMsg)
-				sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)
-				os.Exit(ExitAnalysisFailed)
-				return nil
-			}
-
+		if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
 			errMsg := fmt.Sprintf("Analysis failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
 			sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)

@@ -19,9 +19,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.NtfyChannel != "" {
 		t.Errorf("DefaultConfig().NtfyChannel = %v, want empty string", cfg.NtfyChannel)
 	}
-	if cfg.Interactive {
-		t.Error("DefaultConfig().Interactive = true, want false")
-	}
 }
 
 func TestGetConfigPath(t *testing.T) {
@@ -48,7 +45,6 @@ func TestLoadConfigFile(t *testing.T) {
 
 	configContent := `dest: /tmp/prow-artifacts
 analyze_cmd: "echo test"
-interactive: true
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write test config: %v", err)
@@ -64,9 +60,6 @@ interactive: true
 	}
 	if cfg.AnalyzeCmd != "echo test" {
 		t.Errorf("LoadConfigFile().AnalyzeCmd = %v, want %v", cfg.AnalyzeCmd, "echo test")
-	}
-	if !cfg.Interactive {
-		t.Error("LoadConfigFile().Interactive = false, want true")
 	}
 }
 

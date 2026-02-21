@@ -98,20 +98,14 @@ func TestParseAnalyzeCommand(t *testing.T) {
 }
 
 func TestRunAnalysis_EmptyCommand(t *testing.T) {
-	for _, interactive := range []bool{false, true} {
-		err := RunAnalysis("", "/some/path", interactive)
-		if err != nil {
-			t.Errorf("RunAnalysis(interactive=%v) with empty command should not error, got %v", interactive, err)
-		}
+	if err := RunAnalysis("", "/some/path"); err != nil {
+		t.Errorf("RunAnalysis() with empty command should not error, got %v", err)
 	}
 }
 
 func TestRunAnalysis_WhitespaceCommand(t *testing.T) {
-	for _, interactive := range []bool{false, true} {
-		err := RunAnalysis("   ", "/some/path", interactive)
-		if err != nil {
-			t.Errorf("RunAnalysis(interactive=%v) with whitespace command should not error, got %v", interactive, err)
-		}
+	if err := RunAnalysis("   ", "/some/path"); err != nil {
+		t.Errorf("RunAnalysis() with whitespace command should not error, got %v", err)
 	}
 }
 
@@ -134,17 +128,18 @@ func mockExecSyscall(t *testing.T, returnErr error) (path *string, argv *[]strin
 	return &capturedPath, &capturedArgv
 }
 
-func TestRunAnalysis_InteractiveExecsInCurrentShell(t *testing.T) {
-	// When interactive=true, RunAnalysis must use exec (not fork+exec).
+func TestRunAnalysis_ExecsInCurrentShell(t *testing.T) {
+	// RunAnalysis must use exec (not fork+exec) so the session runs in the
+	// current shell with no intermediate child process.
 	gotPath, gotArgv := mockExecSyscall(t, nil)
 
 	tmpDir := t.TempDir()
-	if err := RunAnalysis("echo", tmpDir, true); err != nil {
+	if err := RunAnalysis("echo", tmpDir); err != nil {
 		t.Errorf("RunAnalysis() error = %v, want nil", err)
 	}
 
 	if *gotPath == "" {
-		t.Fatal("execSyscall was not called for interactive mode")
+		t.Fatal("execSyscall was not called")
 	}
 
 	// argv[0] should be the command name, last element should be the artifacts path
@@ -156,25 +151,11 @@ func TestRunAnalysis_InteractiveExecsInCurrentShell(t *testing.T) {
 	}
 }
 
-func TestRunAnalysis_NonInteractiveDoesNotExec(t *testing.T) {
-	// When interactive=false, execSyscall must NOT be called.
-	gotPath, _ := mockExecSyscall(t, nil)
-
-	tmpDir := t.TempDir()
-	if err := RunAnalysis("echo", tmpDir, false); err != nil {
-		t.Errorf("RunAnalysis() error = %v, want nil", err)
-	}
-
-	if *gotPath != "" {
-		t.Error("execSyscall was called for non-interactive mode; it should not be")
-	}
-}
-
 func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
 	_, gotArgv := mockExecSyscall(t, nil)
 
 	artifactsPath := "/test/artifacts/path"
-	if err := RunAnalysis("echo", artifactsPath, true); err != nil {
+	if err := RunAnalysis("echo", artifactsPath); err != nil {
 		t.Fatalf("RunAnalysis() error = %v", err)
 	}
 
@@ -185,28 +166,10 @@ func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
 }
 
 func TestRunAnalysis_NonExistentCommand(t *testing.T) {
-	// LookPath should fail before execSyscall is called (interactive mode)
-	err := RunAnalysis("nonexistent-command-12345", "/some/path", true)
+	// LookPath should fail before execSyscall is called
+	err := RunAnalysis("nonexistent-command-12345", "/some/path")
 	if err == nil {
 		t.Error("RunAnalysis() should return error for non-existent command")
-	}
-}
-
-func TestRunAnalysis_NonInteractiveFailingCommand(t *testing.T) {
-	err := RunAnalysis("false", "/some/path", false)
-	if err == nil {
-		t.Error("RunAnalysis() should return error for failing command")
-		return
-	}
-
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) {
-		t.Errorf("RunAnalysis() error should be ExitError, got %T", err)
-		return
-	}
-
-	if exitErr.ExitCode == 0 {
-		t.Error("ExitError.ExitCode should be non-zero for failed command")
 	}
 }
 
@@ -216,7 +179,7 @@ func TestRunAnalysis_ExecError(t *testing.T) {
 	_, _ = mockExecSyscall(t, wantErr)
 
 	// "echo" is a real command so LookPath succeeds; the mock then returns the error.
-	err := RunAnalysis("echo", "/some/path", true)
+	err := RunAnalysis("echo", "/some/path")
 	if err == nil {
 		t.Fatal("RunAnalysis() should return error when execSyscall fails")
 	}
@@ -243,7 +206,7 @@ func TestRunAnalysis_CommandWithExtraArgs(t *testing.T) {
 
 	artifactsPath := "/artifacts"
 	// Use "echo" (always in PATH) with extra flags to test arg ordering.
-	if err := RunAnalysis("echo --flag value", artifactsPath, true); err != nil {
+	if err := RunAnalysis("echo --flag value", artifactsPath); err != nil {
 		t.Fatalf("RunAnalysis() error = %v", err)
 	}
 
