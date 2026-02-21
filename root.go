@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -283,15 +282,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		}
 
 		if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
-			var exitErr *analyzer.ExitError
-			if errors.As(err, &exitErr) {
-				errMsg := fmt.Sprintf("Analysis failed with exit code %d", exitErr.ExitCode)
-				fmt.Fprintln(os.Stderr, errMsg)
-				sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)
-				os.Exit(ExitAnalysisFailed)
-				return nil
-			}
-
 			errMsg := fmt.Sprintf("Analysis failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
 			sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)
