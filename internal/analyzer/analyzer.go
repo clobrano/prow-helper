@@ -47,8 +47,13 @@ func ParseAnalyzeCommand(cmd string) (string, []string, error) {
 // It is a variable so tests can override it without actually replacing the test process.
 var execSyscall = syscall.Exec
 
+// osChdir is a variable so tests can override it without mutating the test process's cwd.
+var osChdir = os.Chdir
+
 // RunAnalysis replaces the current process with the analysis command by using
-// the exec syscall. The artifacts path is appended as the last argument.
+// the exec syscall. The artifacts path is appended as the last argument and the
+// working directory is changed to artifactsPath before exec, so any files the
+// analysis command writes land in the same folder as the downloaded data.
 // Because exec replaces the process in-place (same PID, terminal, and process
 // group), the session runs directly in the current shell — plain terminal or
 // tmux pane — with no intermediate child process.
@@ -78,6 +83,12 @@ func RunAnalysis(cmdStr, artifactsPath string) error {
 		return fmt.Errorf("command not found %q: %w", name, err)
 	}
 
+	// Change into the artifacts directory so any files the analysis command
+	// writes (using relative paths) land alongside the downloaded data.
+	if err := osChdir(artifactsPath); err != nil {
+		return fmt.Errorf("failed to chdir to artifacts path %q: %w", artifactsPath, err)
+	}
+
 	// Replace the current process with the analysis command.
 	// argv[0] is conventionally the program name, followed by the arguments.
 	return execSyscall(execPath, append([]string{name}, args...), os.Environ())
@@ -102,6 +113,7 @@ func RunAnalysisWithIO(cmdStr, artifactsPath string, stdout, stderr *os.File) er
 	args = append(args, artifactsPath)
 
 	cmd := exec.Command(name, args...)
+	cmd.Dir = artifactsPath
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
