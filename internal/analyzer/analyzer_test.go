@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,32 +98,102 @@ func TestParseAnalyzeCommand(t *testing.T) {
 }
 
 func TestRunAnalysis_EmptyCommand(t *testing.T) {
-	err := RunAnalysis("", "/some/path")
-	if err != nil {
-		t.Errorf("RunAnalysis() with empty command should not error, got %v", err)
+	for _, interactive := range []bool{false, true} {
+		err := RunAnalysis("", "/some/path", interactive)
+		if err != nil {
+			t.Errorf("RunAnalysis(interactive=%v) with empty command should not error, got %v", interactive, err)
+		}
 	}
 }
 
 func TestRunAnalysis_WhitespaceCommand(t *testing.T) {
-	err := RunAnalysis("   ", "/some/path")
-	if err != nil {
-		t.Errorf("RunAnalysis() with whitespace command should not error, got %v", err)
+	for _, interactive := range []bool{false, true} {
+		err := RunAnalysis("   ", "/some/path", interactive)
+		if err != nil {
+			t.Errorf("RunAnalysis(interactive=%v) with whitespace command should not error, got %v", interactive, err)
+		}
 	}
 }
 
-func TestRunAnalysis_SuccessfulCommand(t *testing.T) {
-	tmpDir := t.TempDir()
+// mockExecSyscall replaces execSyscall for the duration of a test and restores it afterward.
+// It captures the arguments that would have been passed to exec and returns the provided error.
+func mockExecSyscall(t *testing.T, returnErr error) (path *string, argv *[]string) {
+	t.Helper()
+	var capturedPath string
+	var capturedArgv []string
 
-	// Use a simple command that should succeed and accept an argument
-	err := RunAnalysis("ls", tmpDir)
-	if err != nil {
+	orig := execSyscall
+	t.Cleanup(func() { execSyscall = orig })
+
+	execSyscall = func(p string, av []string, _ []string) error {
+		capturedPath = p
+		capturedArgv = av
+		return returnErr
+	}
+
+	return &capturedPath, &capturedArgv
+}
+
+func TestRunAnalysis_InteractiveExecsInCurrentShell(t *testing.T) {
+	// When interactive=true, RunAnalysis must use exec (not fork+exec).
+	gotPath, gotArgv := mockExecSyscall(t, nil)
+
+	tmpDir := t.TempDir()
+	if err := RunAnalysis("echo", tmpDir, true); err != nil {
 		t.Errorf("RunAnalysis() error = %v, want nil", err)
 	}
+
+	if *gotPath == "" {
+		t.Fatal("execSyscall was not called for interactive mode")
+	}
+
+	// argv[0] should be the command name, last element should be the artifacts path
+	if (*gotArgv)[0] != "echo" {
+		t.Errorf("argv[0] = %q, want %q", (*gotArgv)[0], "echo")
+	}
+	if (*gotArgv)[len(*gotArgv)-1] != tmpDir {
+		t.Errorf("last argv = %q, want artifacts path %q", (*gotArgv)[len(*gotArgv)-1], tmpDir)
+	}
 }
 
-func TestRunAnalysis_FailingCommand(t *testing.T) {
-	// Use a command that will fail
-	err := RunAnalysis("false", "/some/path")
+func TestRunAnalysis_NonInteractiveDoesNotExec(t *testing.T) {
+	// When interactive=false, execSyscall must NOT be called.
+	gotPath, _ := mockExecSyscall(t, nil)
+
+	tmpDir := t.TempDir()
+	if err := RunAnalysis("echo", tmpDir, false); err != nil {
+		t.Errorf("RunAnalysis() error = %v, want nil", err)
+	}
+
+	if *gotPath != "" {
+		t.Error("execSyscall was called for non-interactive mode; it should not be")
+	}
+}
+
+func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
+	_, gotArgv := mockExecSyscall(t, nil)
+
+	artifactsPath := "/test/artifacts/path"
+	if err := RunAnalysis("echo", artifactsPath, true); err != nil {
+		t.Fatalf("RunAnalysis() error = %v", err)
+	}
+
+	last := (*gotArgv)[len(*gotArgv)-1]
+	if last != artifactsPath {
+		t.Errorf("artifacts path in argv = %q, want %q", last, artifactsPath)
+	}
+}
+
+func TestRunAnalysis_NonExistentCommand(t *testing.T) {
+	// LookPath should fail before execSyscall is called (interactive mode)
+	err := RunAnalysis("nonexistent-command-12345", "/some/path", true)
+	if err == nil {
+		t.Error("RunAnalysis() should return error for non-existent command")
+	}
+}
+
+func TestRunAnalysis_NonInteractiveFailingCommand(t *testing.T) {
+	err := RunAnalysis("false", "/some/path", false)
 	if err == nil {
 		t.Error("RunAnalysis() should return error for failing command")
 		return
@@ -139,44 +210,18 @@ func TestRunAnalysis_FailingCommand(t *testing.T) {
 	}
 }
 
-func TestRunAnalysis_NonExistentCommand(t *testing.T) {
-	err := RunAnalysis("nonexistent-command-12345", "/some/path")
+func TestRunAnalysis_ExecError(t *testing.T) {
+	// If execSyscall returns an error (e.g. permission denied), RunAnalysis propagates it.
+	wantErr := errors.New("exec: permission denied")
+	_, _ = mockExecSyscall(t, wantErr)
+
+	// "echo" is a real command so LookPath succeeds; the mock then returns the error.
+	err := RunAnalysis("echo", "/some/path", true)
 	if err == nil {
-		t.Error("RunAnalysis() should return error for non-existent command")
+		t.Fatal("RunAnalysis() should return error when execSyscall fails")
 	}
-}
-
-func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
-	tmpDir := t.TempDir()
-	outputFile := filepath.Join(tmpDir, "output.txt")
-
-	// Create a script that writes its argument to a file
-	scriptContent := `#!/bin/bash
-echo "$1" > "` + outputFile + `"
-`
-	scriptPath := filepath.Join(tmpDir, "test-script.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to write test script: %v", err)
-	}
-
-	artifactsPath := "/test/artifacts/path"
-	err := RunAnalysis(scriptPath, artifactsPath)
-	if err != nil {
-		t.Fatalf("RunAnalysis() error = %v", err)
-	}
-
-	// Check that the artifacts path was passed as argument
-	output, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Fatalf("Failed to read output file: %v", err)
-	}
-
-	// Trim newline
-	got := string(output)
-	got = got[:len(got)-1] // Remove trailing newline
-
-	if got != artifactsPath {
-		t.Errorf("Script received argument = %v, want %v", got, artifactsPath)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("RunAnalysis() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -191,3 +236,60 @@ func TestExitError(t *testing.T) {
 		t.Errorf("ExitError.Error() = %v, unexpected format", errStr)
 	}
 }
+
+func TestRunAnalysis_CommandWithExtraArgs(t *testing.T) {
+	// Verify that extra args from the command string appear before the artifacts path.
+	_, gotArgv := mockExecSyscall(t, nil)
+
+	artifactsPath := "/artifacts"
+	// Use "echo" (always in PATH) with extra flags to test arg ordering.
+	if err := RunAnalysis("echo --flag value", artifactsPath, true); err != nil {
+		t.Fatalf("RunAnalysis() error = %v", err)
+	}
+
+	// Expected argv: ["echo", "--flag", "value", "/artifacts"]
+	av := *gotArgv
+	if av[0] != "echo" {
+		t.Errorf("argv[0] = %q, want %q", av[0], "echo")
+	}
+	if av[len(av)-1] != artifactsPath {
+		t.Errorf("last argv = %q, want %q", av[len(av)-1], artifactsPath)
+	}
+}
+
+// TestRunAnalysisWithIO_PassesArtifactsPath keeps the RunAnalysisWithIO behaviour tested
+// via an actual subprocess (exec.Command), which is used for background/testing scenarios.
+func TestRunAnalysisWithIO_PassesArtifactsPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.txt")
+
+	scriptContent := `#!/bin/bash
+echo "$1" > "` + outputFile + `"
+`
+	scriptPath := filepath.Join(tmpDir, "test-script.sh")
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+		t.Fatalf("Failed to write test script: %v", err)
+	}
+
+	artifactsPath := "/test/artifacts/path"
+	stdout, _ := os.Open(os.DevNull)
+	stderr, _ := os.Open(os.DevNull)
+	defer stdout.Close()
+	defer stderr.Close()
+
+	err := RunAnalysisWithIO(scriptPath, artifactsPath, stdout, stderr)
+	if err != nil {
+		t.Fatalf("RunAnalysisWithIO() error = %v", err)
+	}
+
+	output, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	got := strings.TrimRight(string(output), "\n")
+	if got != artifactsPath {
+		t.Errorf("script received arg = %q, want %q", got, artifactsPath)
+	}
+}
+

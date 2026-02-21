@@ -13,6 +13,7 @@ type Config struct {
 	Dest        string `yaml:"dest"`         // Download destination directory
 	AnalyzeCmd  string `yaml:"analyze_cmd"`  // Command to run after download
 	NtfyChannel string `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
+	Interactive bool   `yaml:"interactive"`  // Run analysis command in the current shell via exec
 }
 
 // DefaultConfig returns a Config with default values.
@@ -55,6 +56,7 @@ func LoadEnvConfig() *Config {
 		Dest:        os.Getenv("PROW_HELPER_DEST"),
 		AnalyzeCmd:  os.Getenv("PROW_HELPER_ANALYZE_CMD"),
 		NtfyChannel: os.Getenv("NTFY_CHANNEL"),
+		Interactive: os.Getenv("PROW_HELPER_INTERACTIVE") == "true",
 	}
 }
 
@@ -81,6 +83,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if file.NtfyChannel != "" {
 			result.NtfyChannel = file.NtfyChannel
 		}
+		if file.Interactive {
+			result.Interactive = true
+		}
 	}
 
 	// Override with env config
@@ -94,6 +99,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if env.NtfyChannel != "" {
 			result.NtfyChannel = env.NtfyChannel
 		}
+		if env.Interactive {
+			result.Interactive = true
+		}
 	}
 
 	// Override with CLI config
@@ -106,6 +114,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if cli.NtfyChannel != "" {
 			result.NtfyChannel = cli.NtfyChannel
+		}
+		if cli.Interactive {
+			result.Interactive = true
 		}
 	}
 
