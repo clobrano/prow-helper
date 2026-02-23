@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/mattn/go-shellwords"
 )
@@ -42,8 +43,22 @@ func ParseAnalyzeCommand(cmd string) (string, []string, error) {
 	return args[0], args[1:], nil
 }
 
-// RunAnalysis executes the analysis command with the artifacts path as an argument.
-// The artifacts path is appended to the command arguments.
+// execSyscall is the low-level exec function used to replace the current process.
+// It is a variable so tests can override it without actually replacing the test process.
+var execSyscall = syscall.Exec
+
+// osChdir is a variable so tests can override it without mutating the test process's cwd.
+var osChdir = os.Chdir
+
+// RunAnalysis replaces the current process with the analysis command by using
+// the exec syscall. The artifacts path is appended as the last argument and the
+// working directory is changed to artifactsPath before exec, so any files the
+// analysis command writes land in the same folder as the downloaded data.
+// Because exec replaces the process in-place (same PID, terminal, and process
+// group), the session runs directly in the current shell — plain terminal or
+// tmux pane — with no intermediate child process.
+//
+// RunAnalysis only returns when the exec itself fails (e.g. command not found).
 func RunAnalysis(cmdStr, artifactsPath string) error {
 	if strings.TrimSpace(cmdStr) == "" {
 		// No analysis command configured, skip silently
@@ -62,22 +77,21 @@ func RunAnalysis(cmdStr, artifactsPath string) error {
 	// Append artifacts path as the last argument
 	args = append(args, artifactsPath)
 
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return &ExitError{
-				ExitCode: exitErr.ExitCode(),
-				Message:  err.Error(),
-			}
-		}
-		return fmt.Errorf("failed to run analysis command: %w", err)
+	// Resolve the full executable path
+	execPath, err := exec.LookPath(name)
+	if err != nil {
+		return fmt.Errorf("command not found %q: %w", name, err)
 	}
 
-	return nil
+	// Change into the artifacts directory so any files the analysis command
+	// writes (using relative paths) land alongside the downloaded data.
+	if err := osChdir(artifactsPath); err != nil {
+		return fmt.Errorf("failed to chdir to artifacts path %q: %w", artifactsPath, err)
+	}
+
+	// Replace the current process with the analysis command.
+	// argv[0] is conventionally the program name, followed by the arguments.
+	return execSyscall(execPath, append([]string{name}, args...), os.Environ())
 }
 
 // RunAnalysisWithIO executes the analysis command with custom IO streams.
@@ -99,6 +113,7 @@ func RunAnalysisWithIO(cmdStr, artifactsPath string, stdout, stderr *os.File) er
 	args = append(args, artifactsPath)
 
 	cmd := exec.Command(name, args...)
+	cmd.Dir = artifactsPath
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 

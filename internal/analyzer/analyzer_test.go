@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -97,86 +98,130 @@ func TestParseAnalyzeCommand(t *testing.T) {
 }
 
 func TestRunAnalysis_EmptyCommand(t *testing.T) {
-	err := RunAnalysis("", "/some/path")
-	if err != nil {
+	if err := RunAnalysis("", "/some/path"); err != nil {
 		t.Errorf("RunAnalysis() with empty command should not error, got %v", err)
 	}
 }
 
 func TestRunAnalysis_WhitespaceCommand(t *testing.T) {
-	err := RunAnalysis("   ", "/some/path")
-	if err != nil {
+	if err := RunAnalysis("   ", "/some/path"); err != nil {
 		t.Errorf("RunAnalysis() with whitespace command should not error, got %v", err)
 	}
 }
 
-func TestRunAnalysis_SuccessfulCommand(t *testing.T) {
-	tmpDir := t.TempDir()
+// mockExecSyscall replaces execSyscall for the duration of a test and restores it afterward.
+// It captures the arguments that would have been passed to exec and returns the provided error.
+func mockExecSyscall(t *testing.T, returnErr error) (path *string, argv *[]string) {
+	t.Helper()
+	var capturedPath string
+	var capturedArgv []string
 
-	// Use a simple command that should succeed and accept an argument
-	err := RunAnalysis("ls", tmpDir)
-	if err != nil {
+	orig := execSyscall
+	t.Cleanup(func() { execSyscall = orig })
+
+	execSyscall = func(p string, av []string, _ []string) error {
+		capturedPath = p
+		capturedArgv = av
+		return returnErr
+	}
+
+	return &capturedPath, &capturedArgv
+}
+
+// mockOsChdir replaces osChdir for the duration of a test and restores it afterward.
+// It captures the directory that would have been chdir'd into.
+func mockOsChdir(t *testing.T) *string {
+	t.Helper()
+	var capturedDir string
+
+	orig := osChdir
+	t.Cleanup(func() { osChdir = orig })
+
+	osChdir = func(dir string) error {
+		capturedDir = dir
+		return nil
+	}
+
+	return &capturedDir
+}
+
+func TestRunAnalysis_ExecsInCurrentShell(t *testing.T) {
+	// RunAnalysis must use exec (not fork+exec) so the session runs in the
+	// current shell with no intermediate child process.
+	gotPath, gotArgv := mockExecSyscall(t, nil)
+	mockOsChdir(t)
+
+	tmpDir := t.TempDir()
+	if err := RunAnalysis("echo", tmpDir); err != nil {
 		t.Errorf("RunAnalysis() error = %v, want nil", err)
+	}
+
+	if *gotPath == "" {
+		t.Fatal("execSyscall was not called")
+	}
+
+	// argv[0] should be the command name, last element should be the artifacts path
+	if (*gotArgv)[0] != "echo" {
+		t.Errorf("argv[0] = %q, want %q", (*gotArgv)[0], "echo")
+	}
+	if (*gotArgv)[len(*gotArgv)-1] != tmpDir {
+		t.Errorf("last argv = %q, want artifacts path %q", (*gotArgv)[len(*gotArgv)-1], tmpDir)
 	}
 }
 
-func TestRunAnalysis_FailingCommand(t *testing.T) {
-	// Use a command that will fail
-	err := RunAnalysis("false", "/some/path")
-	if err == nil {
-		t.Error("RunAnalysis() should return error for failing command")
-		return
+func TestRunAnalysis_ChdirToArtifactsPath(t *testing.T) {
+	// RunAnalysis must chdir into the artifacts directory before exec so that
+	// any files the analysis command writes land alongside the downloaded data.
+	mockExecSyscall(t, nil)
+	gotDir := mockOsChdir(t)
+
+	tmpDir := t.TempDir()
+	if err := RunAnalysis("echo", tmpDir); err != nil {
+		t.Fatalf("RunAnalysis() error = %v", err)
 	}
 
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) {
-		t.Errorf("RunAnalysis() error should be ExitError, got %T", err)
-		return
+	if *gotDir != tmpDir {
+		t.Errorf("chdir target = %q, want %q", *gotDir, tmpDir)
+	}
+}
+
+func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
+	_, gotArgv := mockExecSyscall(t, nil)
+	mockOsChdir(t)
+
+	artifactsPath := t.TempDir()
+	if err := RunAnalysis("echo", artifactsPath); err != nil {
+		t.Fatalf("RunAnalysis() error = %v", err)
 	}
 
-	if exitErr.ExitCode == 0 {
-		t.Error("ExitError.ExitCode should be non-zero for failed command")
+	last := (*gotArgv)[len(*gotArgv)-1]
+	if last != artifactsPath {
+		t.Errorf("artifacts path in argv = %q, want %q", last, artifactsPath)
 	}
 }
 
 func TestRunAnalysis_NonExistentCommand(t *testing.T) {
-	err := RunAnalysis("nonexistent-command-12345", "/some/path")
+	// LookPath should fail before chdir or execSyscall are called
+	mockOsChdir(t)
+	err := RunAnalysis("nonexistent-command-12345", t.TempDir())
 	if err == nil {
 		t.Error("RunAnalysis() should return error for non-existent command")
 	}
 }
 
-func TestRunAnalysis_PassesArtifactsPath(t *testing.T) {
-	tmpDir := t.TempDir()
-	outputFile := filepath.Join(tmpDir, "output.txt")
+func TestRunAnalysis_ExecError(t *testing.T) {
+	// If execSyscall returns an error (e.g. permission denied), RunAnalysis propagates it.
+	wantErr := errors.New("exec: permission denied")
+	_, _ = mockExecSyscall(t, wantErr)
+	mockOsChdir(t)
 
-	// Create a script that writes its argument to a file
-	scriptContent := `#!/bin/bash
-echo "$1" > "` + outputFile + `"
-`
-	scriptPath := filepath.Join(tmpDir, "test-script.sh")
-	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
-		t.Fatalf("Failed to write test script: %v", err)
+	// "echo" is a real command so LookPath succeeds; the mock then returns the error.
+	err := RunAnalysis("echo", t.TempDir())
+	if err == nil {
+		t.Fatal("RunAnalysis() should return error when execSyscall fails")
 	}
-
-	artifactsPath := "/test/artifacts/path"
-	err := RunAnalysis(scriptPath, artifactsPath)
-	if err != nil {
-		t.Fatalf("RunAnalysis() error = %v", err)
-	}
-
-	// Check that the artifacts path was passed as argument
-	output, err := os.ReadFile(outputFile)
-	if err != nil {
-		t.Fatalf("Failed to read output file: %v", err)
-	}
-
-	// Trim newline
-	got := string(output)
-	got = got[:len(got)-1] // Remove trailing newline
-
-	if got != artifactsPath {
-		t.Errorf("Script received argument = %v, want %v", got, artifactsPath)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("RunAnalysis() error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -191,3 +236,61 @@ func TestExitError(t *testing.T) {
 		t.Errorf("ExitError.Error() = %v, unexpected format", errStr)
 	}
 }
+
+func TestRunAnalysis_CommandWithExtraArgs(t *testing.T) {
+	// Verify that extra args from the command string appear before the artifacts path.
+	_, gotArgv := mockExecSyscall(t, nil)
+	mockOsChdir(t)
+
+	artifactsPath := t.TempDir()
+	// Use "echo" (always in PATH) with extra flags to test arg ordering.
+	if err := RunAnalysis("echo --flag value", artifactsPath); err != nil {
+		t.Fatalf("RunAnalysis() error = %v", err)
+	}
+
+	// Expected argv: ["echo", "--flag", "value", "/artifacts"]
+	av := *gotArgv
+	if av[0] != "echo" {
+		t.Errorf("argv[0] = %q, want %q", av[0], "echo")
+	}
+	if av[len(av)-1] != artifactsPath {
+		t.Errorf("last argv = %q, want %q", av[len(av)-1], artifactsPath)
+	}
+}
+
+// TestRunAnalysisWithIO_PassesArtifactsPath keeps the RunAnalysisWithIO behaviour tested
+// via an actual subprocess (exec.Command), which is used for background/testing scenarios.
+func TestRunAnalysisWithIO_PassesArtifactsPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	outputFile := filepath.Join(tmpDir, "output.txt")
+
+	scriptContent := `#!/bin/bash
+echo "$1" > "` + outputFile + `"
+`
+	scriptPath := filepath.Join(tmpDir, "test-script.sh")
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+		t.Fatalf("Failed to write test script: %v", err)
+	}
+
+	artifactsPath := t.TempDir()
+	stdout, _ := os.Open(os.DevNull)
+	stderr, _ := os.Open(os.DevNull)
+	defer stdout.Close()
+	defer stderr.Close()
+
+	err := RunAnalysisWithIO(scriptPath, artifactsPath, stdout, stderr)
+	if err != nil {
+		t.Fatalf("RunAnalysisWithIO() error = %v", err)
+	}
+
+	output, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	got := strings.TrimRight(string(output), "\n")
+	if got != artifactsPath {
+		t.Errorf("script received arg = %q, want %q", got, artifactsPath)
+	}
+}
+
