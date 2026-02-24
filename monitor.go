@@ -189,7 +189,8 @@ func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel st
 
 	// Initial check immediately so we don't wait a full interval before first output.
 	checkAllStatuses(entries)
-	notifyCompletions(entries, ntfyChannel)
+	// Silence notifications for jobs that were already finished before we started.
+	markAlreadyFinished(entries)
 	printStatusTable(entries)
 
 	for {
@@ -207,6 +208,17 @@ func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel st
 			checkAllStatuses(entries)
 			notifyCompletions(entries, ntfyChannel)
 			printStatusTable(entries)
+		}
+	}
+}
+
+// markAlreadyFinished silently sets notified=true for every entry that is
+// already in a terminal state so that we never fire a notification for jobs
+// that were complete before monitoring began.
+func markAlreadyFinished(entries []*monitorEntry) {
+	for _, e := range entries {
+		if e.status != nil && e.status.Finished {
+			e.notified = true
 		}
 	}
 }
