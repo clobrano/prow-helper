@@ -177,7 +177,7 @@ The watch mode polls the job's `finished.json` every 15 minutes until the job co
 Watch multiple jobs from a Prow status page in one shot:
 
 ```bash
-prow-helper monitor "https://prow.ci.openshift.org/?author=clobrano"
+prow-helper monitor "https://prow.ci.openshift.org/?author=<your-username>"
 ```
 
 The command fetches all jobs from the status page via the `/prowjobs.js` API,
