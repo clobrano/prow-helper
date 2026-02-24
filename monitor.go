@@ -108,11 +108,19 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	return monitorJobs(selected, flagMonitorInterval)
 }
 
-// printEntryList prints the indexed job list with name, build ID and current state.
+// stateWidth is the column width reserved for Prow state strings.
+// "triggered" (9 chars) is the longest state word.
+const stateWidth = 9
+
+// printEntryList prints the indexed job list: [idx] state  job-name  build-id
 func printEntryList(entries []*monitorEntry) {
+	idxWidth := len(fmt.Sprintf("%d", len(entries)))
 	for i, e := range entries {
-		fmt.Fprintf(os.Stdout, "  [%d] %-55s build: %-15s state: %s\n",
-			i+1, e.metadata.JobName, e.metadata.BuildID, e.state)
+		fmt.Fprintf(os.Stdout, "  [%*d] %-*s  %s  %s\n",
+			idxWidth, i+1,
+			stateWidth, e.state,
+			e.metadata.JobName,
+			e.metadata.BuildID)
 	}
 }
 
@@ -258,8 +266,10 @@ func allEntriesDone(entries []*monitorEntry) bool {
 }
 
 // printStatusTable prints the current status of all monitored jobs.
+// Layout mirrors printEntryList: [idx] status  job-name  build-id
 func printStatusTable(entries []*monitorEntry) {
 	fmt.Printf("[%s]\n", time.Now().Format("15:04:05"))
+	idxWidth := len(fmt.Sprintf("%d", len(entries)))
 	for i, e := range entries {
 		var statusStr string
 		switch {
@@ -272,8 +282,11 @@ func printStatusTable(entries []*monitorEntry) {
 		default:
 			statusStr = output.FormatStatus(output.StatusFailed)
 		}
-		fmt.Printf("  [%d] %-55s build: %-15s %s\n",
-			i+1, e.metadata.JobName, e.metadata.BuildID, statusStr)
+		fmt.Printf("  [%*d] %s  %s  %s\n",
+			idxWidth, i+1,
+			statusStr,
+			e.metadata.JobName,
+			e.metadata.BuildID)
 	}
 	fmt.Println()
 }
