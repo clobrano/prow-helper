@@ -24,6 +24,7 @@ Analyzing PROW test results typically requires multiple manual steps:
 - **AI Analysis Integration**: Run Claude, Gemini, or other AI tools on downloaded artifacts
 - **Background Processing**: Fork to background and receive desktop notification on completion
 - **Watch Mode**: Poll running jobs until completion, then automatically download artifacts
+- **Monitor Command**: Fetch all jobs from a Prow status page, interactively select which to watch, and track their progress in a live status table
 - **ntfy.sh Notifications**: Receive push notifications on mobile devices via [ntfy.sh](https://ntfy.sh)
 
 ## Installation
@@ -89,6 +90,7 @@ prow-helper --dest ~/artifacts --analyze-cmd "claude 'analyze these test failure
 | `--background` | Run in background and notify on completion |
 | `--watch` | Poll job status until completion before downloading |
 | `--ntfy-channel` | ntfy.sh channel for push notifications |
+| `monitor --interval` | Polling interval for `monitor` status checks (default: 15m) |
 | `--help` | Display help information |
 | `--version` | Display version information |
 
@@ -169,6 +171,34 @@ prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
 ```
 
 The watch mode polls the job's `finished.json` every 15 minutes until the job completes.
+
+### Monitor Command
+
+Watch multiple jobs from a Prow status page in one shot:
+
+```bash
+prow-helper monitor "https://prow.ci.openshift.org/?author=clobrano"
+```
+
+The command fetches all jobs from the status page via the `/prowjobs.js` API,
+then opens an interactive selector:
+
+| Key | Action |
+|-----|--------|
+| Type | Filter by substring (job name, state, …) |
+| ↑ / ↓ | Move cursor |
+| `Space` | Toggle job under cursor |
+| `Ctrl+A` | Select / deselect all visible jobs |
+| `Enter` | Confirm selection and start monitoring |
+| `Esc` | Clear search (first press) or cancel (second press) |
+
+After confirming, prow-helper polls the selected jobs at a configurable
+interval and prints a live status table until all jobs complete.
+
+```bash
+# Custom polling interval (default: 15 minutes)
+prow-helper monitor --interval 5m "https://prow.ci.openshift.org/?author=clobrano"
+```
 
 ### ntfy.sh Push Notifications
 

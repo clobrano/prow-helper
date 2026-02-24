@@ -30,7 +30,7 @@ The Prow status page is a React SPA — job data is loaded at runtime from the
 /prowjobs.js API. The monitor command calls that API directly and filters by
 any query parameters present in the URL (author, job, state).
 
-An interactive fuzzy-search list lets you select which jobs to monitor:
+An interactive list lets you select which jobs to monitor:
   Type       – filter the list (substring match against job name / state)
   ↑ / ↓     – move the cursor
   SPACE      – toggle the job under the cursor
