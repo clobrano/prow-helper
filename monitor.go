@@ -15,7 +15,7 @@ import (
 
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
-	"github.com/clobrano/prow-helper/internal/resolver"
+	"github.com/clobrano/prow-helper/internal/prowapi"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
 
@@ -26,6 +26,10 @@ var monitorCmd = &cobra.Command{
 	Short: "Fetch and monitor prow jobs from a status page",
 	Long: `monitor fetches all prow job links from a Prow status page (e.g. filtered by
 author) and lets you choose which jobs to watch.
+
+The Prow status page is a React SPA — job data is loaded at runtime from the
+/prowjobs.js API. The monitor command calls that API directly and filters by
+any query parameters present in the URL (author, job, state).
 
 The tool presents the discovered jobs and prompts for a selection:
   all        – monitor every job found
@@ -48,6 +52,7 @@ func init() {
 // monitorEntry holds the parsed metadata for a prow job and its latest known status.
 type monitorEntry struct {
 	metadata *parser.ProwMetadata
+	state    string // original state from the API (triggered, pending, success, …)
 	status   *watcher.JobStatus // nil while still running
 	err      error
 }
@@ -55,30 +60,37 @@ type monitorEntry struct {
 func runMonitor(cmd *cobra.Command, args []string) error {
 	pageURL := args[0]
 
-	fmt.Fprintf(os.Stdout, "Fetching prow job links from %s...\n", pageURL)
+	fmt.Fprintf(os.Stdout, "Fetching prow jobs from %s...\n", pageURL)
 
-	links, err := resolver.FindProwJobLinks(pageURL)
+	jobs, err := prowapi.FetchJobs(pageURL)
 	if err != nil {
-		return fmt.Errorf("failed to find prow job links: %w", err)
+		return fmt.Errorf("failed to fetch prow jobs: %w", err)
 	}
 
-	// Parse each link into metadata; skip any we cannot parse.
-	entries := make([]*monitorEntry, 0, len(links))
-	for _, link := range links {
-		meta, parseErr := parser.ParseURL(link)
+	if len(jobs) == 0 {
+		return fmt.Errorf("no prow jobs found (try adjusting the filter parameters in the URL)")
+	}
+
+	// Parse each job URL into metadata; skip any we cannot parse.
+	entries := make([]*monitorEntry, 0, len(jobs))
+	for _, j := range jobs {
+		meta, parseErr := parser.ParseURL(j.URL)
 		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not parse link %s: %v\n", link, parseErr)
+			fmt.Fprintf(os.Stderr, "Warning: could not parse job URL %s: %v\n", j.URL, parseErr)
 			continue
 		}
-		entries = append(entries, &monitorEntry{metadata: meta})
+		entries = append(entries, &monitorEntry{
+			metadata: meta,
+			state:    j.State,
+		})
 	}
 
 	if len(entries) == 0 {
-		return fmt.Errorf("no valid prow job links found on page")
+		return fmt.Errorf("no valid prow job URLs found")
 	}
 
 	// Display the full list so the user can make an informed choice.
-	fmt.Fprintf(os.Stdout, "\nFound %d prow job(s) on %s:\n\n", len(entries), pageURL)
+	fmt.Fprintf(os.Stdout, "\nFound %d prow job(s):\n\n", len(entries))
 	printEntryList(entries)
 	fmt.Println()
 
@@ -96,10 +108,11 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	return monitorJobs(selected, flagMonitorInterval)
 }
 
-// printEntryList prints the indexed job list.
+// printEntryList prints the indexed job list with name, build ID and current state.
 func printEntryList(entries []*monitorEntry) {
 	for i, e := range entries {
-		fmt.Fprintf(os.Stdout, "  [%d] %-55s build: %s\n", i+1, e.metadata.JobName, e.metadata.BuildID)
+		fmt.Fprintf(os.Stdout, "  [%d] %-55s build: %-15s state: %s\n",
+			i+1, e.metadata.JobName, e.metadata.BuildID, e.state)
 	}
 }
 
@@ -234,7 +247,7 @@ func checkAllStatuses(entries []*monitorEntry) {
 	wg.Wait()
 }
 
-// allEntriesDone returns true when every entry has a finished status.
+// allEntriesDone returns true when every entry has a finished status or an error.
 func allEntriesDone(entries []*monitorEntry) bool {
 	for _, e := range entries {
 		if e.err == nil && (e.status == nil || !e.status.Finished) {
@@ -265,7 +278,7 @@ func printStatusTable(entries []*monitorEntry) {
 	fmt.Println()
 }
 
-// printFinalSummary prints a clean summary table once all jobs are done.
+// printFinalSummary prints a summary of pass/fail counts once all jobs are done.
 func printFinalSummary(entries []*monitorEntry) {
 	fmt.Println("Summary:")
 	passed, failed, errored := 0, 0, 0
