@@ -31,7 +31,7 @@ func TestRefilter(t *testing.T) {
 		{Label: "failure  pull-ci-gcp-sdn  222"},
 		{Label: "pending  pull-ci-aws-sdn  333"},
 	}
-	m := newModel(items)
+	m := newModel(items, nil)
 
 	// No query — all items visible.
 	if len(m.filtered) != 3 {
@@ -62,7 +62,7 @@ func TestRefilter(t *testing.T) {
 
 func TestToggleAll(t *testing.T) {
 	items := []Item{{Label: "a"}, {Label: "b"}, {Label: "c"}}
-	m := newModel(items)
+	m := newModel(items, nil)
 
 	// First A: select all.
 	m, _ = toggleAll(m)
@@ -98,7 +98,7 @@ func toggleAll(m model) (model, bool) {
 
 func TestCursorBoundaries(t *testing.T) {
 	items := []Item{{Label: "a"}, {Label: "b"}, {Label: "c"}}
-	m := newModel(items)
+	m := newModel(items, nil)
 	m.cursor = 2
 
 	// Narrow the query so only one item is visible; cursor must clamp.

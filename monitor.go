@@ -80,6 +80,44 @@ func formatTimeSuffix(start, end time.Time) string {
 // "triggered" (9 chars) is the longest state word.
 const stateWidth = 9
 
+// buildEntriesAndItems converts a slice of API jobs into parallel slices of
+// monitorEntry and selector.Item.  Items whose URL cannot be parsed are
+// skipped with a warning.
+func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item, error) {
+	entries := make([]*monitorEntry, 0, len(jobs))
+	keys := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		meta, parseErr := parser.ParseURL(j.URL)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not parse job URL %s: %v\n", j.URL, parseErr)
+			continue
+		}
+		entries = append(entries, &monitorEntry{
+			metadata:       meta,
+			state:          j.State,
+			startTime:      j.StartTime,
+			completionTime: j.CompletionTime,
+		})
+		keys = append(keys, j.URL)
+	}
+	if len(entries) == 0 {
+		return nil, nil, fmt.Errorf("no valid prow job URLs found")
+	}
+	idxWidth := len(fmt.Sprintf("%d", len(entries)))
+	items := make([]selector.Item, len(entries))
+	for i, e := range entries {
+		items[i] = selector.Item{
+			Key: keys[i],
+			Label: fmt.Sprintf("[%*d] %-*s  %s%s",
+				idxWidth, i+1,
+				stateWidth, e.state,
+				e.metadata.JobName,
+				formatTimeSuffix(e.startTime, e.completionTime)),
+		}
+	}
+	return entries, items, nil
+}
+
 func runMonitor(cmd *cobra.Command, args []string) error {
 	pageURL := args[0]
 
@@ -93,39 +131,28 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no prow jobs found (try adjusting the filter parameters in the URL)")
 	}
 
-	// Parse each job URL into metadata; skip any we cannot parse.
-	entries := make([]*monitorEntry, 0, len(jobs))
-	for _, j := range jobs {
-		meta, parseErr := parser.ParseURL(j.URL)
-		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not parse job URL %s: %v\n", j.URL, parseErr)
-			continue
-		}
-		entries = append(entries, &monitorEntry{
-			metadata:       meta,
-			state:          j.State,
-			startTime:      j.StartTime,
-			completionTime: j.CompletionTime,
-		})
-	}
-	if len(entries) == 0 {
-		return fmt.Errorf("no valid prow job URLs found")
+	entries, items, err := buildEntriesAndItems(jobs)
+	if err != nil {
+		return err
 	}
 
-	// Build selector items — one label per entry formatted as the status table.
-	idxWidth := len(fmt.Sprintf("%d", len(entries)))
-	items := make([]selector.Item, len(entries))
-	for i, e := range entries {
-		items[i] = selector.Item{
-			Label: fmt.Sprintf("[%*d] %-*s  %s%s",
-				idxWidth, i+1,
-				stateWidth, e.state,
-				e.metadata.JobName,
-				formatTimeSuffix(e.startTime, e.completionTime)),
+	refreshFn := func() ([]selector.Item, error) {
+		refreshed, fetchErr := prowapi.FetchJobs(pageURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to fetch prow jobs: %w", fetchErr)
 		}
+		if len(refreshed) == 0 {
+			return nil, fmt.Errorf("no prow jobs found")
+		}
+		newEntries, newItems, buildErr := buildEntriesAndItems(refreshed)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		entries = newEntries
+		return newItems, nil
 	}
 
-	selectedIndices, err := selector.Run(items)
+	selectedIndices, err := selector.Run(items, refreshFn)
 	if err != nil {
 		return err
 	}

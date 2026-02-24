@@ -1,35 +1,51 @@
 // Package selector provides an interactive fuzzy multi-select TUI built on
 // bubbletea.  The user types to filter the list, navigates with ↑/↓, toggles
 // individual items with SPACE, selects/deselects all visible items with A, and
-// confirms with ENTER.
+// confirms with ENTER.  Ctrl+R refreshes the list from the source.
 package selector
 
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Item is a single selectable row. Label is the string shown and matched against.
+// Item is a single selectable row. Label is the string shown and matched
+// against. Key is a stable identifier used to re-apply selections after a
+// Ctrl+R refresh; if empty, the selection for that item is not preserved.
 type Item struct {
 	Label string
+	Key   string
+}
+
+// refreshMsg is sent back to the model when a background refresh completes.
+type refreshMsg struct {
+	items []Item
+	err   error
 }
 
 type model struct {
-	items    []Item
-	filtered []int        // positions in items[] that pass the current query
-	selected map[int]bool // keyed by position in items[]
-	cursor   int          // position in filtered[]
-	query    string
-	done     bool
-	quit     bool
+	items       []Item
+	filtered    []int        // positions in items[] that pass the current query
+	selected    map[int]bool // keyed by position in items[]
+	cursor      int          // position in filtered[]
+	query       string
+	done        bool
+	quit        bool
+	refreshFn   func() ([]Item, error)
+	refreshing  bool
+	refreshErr  error
+	lastRefresh time.Time
 }
 
-func newModel(items []Item) model {
+func newModel(items []Item, refreshFn func() ([]Item, error)) model {
 	m := model{
-		items:    items,
-		selected: make(map[int]bool),
+		items:       items,
+		selected:    make(map[int]bool),
+		refreshFn:   refreshFn,
+		lastRefresh: time.Now(),
 	}
 	m.refilter()
 	return m
@@ -74,6 +90,31 @@ func (m model) Init() tea.Cmd { return nil }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case refreshMsg:
+		m.refreshing = false
+		if msg.err != nil {
+			m.refreshErr = msg.err
+			return m, nil
+		}
+		// Restore selections for items whose Key is still present.
+		oldSelected := make(map[string]bool)
+		for idx, sel := range m.selected {
+			if sel && idx < len(m.items) && m.items[idx].Key != "" {
+				oldSelected[m.items[idx].Key] = true
+			}
+		}
+		m.items = msg.items
+		m.selected = make(map[int]bool)
+		for i, item := range m.items {
+			if item.Key != "" && oldSelected[item.Key] {
+				m.selected[i] = true
+			}
+		}
+		m.refreshErr = nil
+		m.lastRefresh = time.Now()
+		m.refilter()
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.Type {
 
@@ -132,6 +173,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected[fi] = !allSelected
 			}
 
+		case tea.KeyCtrlR:
+			if m.refreshFn != nil && !m.refreshing {
+				m.refreshing = true
+				m.refreshErr = nil
+				fn := m.refreshFn
+				return m, func() tea.Msg {
+					items, err := fn()
+					return refreshMsg{items: items, err: err}
+				}
+			}
+
 		case tea.KeyRunes:
 			m.query += string(msg.Runes)
 			m.refilter()
@@ -169,8 +221,19 @@ func (m model) View() string {
 			nSel++
 		}
 	}
-	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all  ENTER confirm  ESC cancel\n",
-		len(m.filtered), len(m.items), nSel)
+
+	var refreshStatus string
+	switch {
+	case m.refreshing:
+		refreshStatus = "  [refreshing...]"
+	case m.refreshErr != nil:
+		refreshStatus = fmt.Sprintf("  [refresh error: %v]", m.refreshErr)
+	case !m.lastRefresh.IsZero():
+		refreshStatus = fmt.Sprintf("  [last refresh: %s]", m.lastRefresh.Local().Format("15:04:05"))
+	}
+
+	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all  Ctrl+R refresh  ENTER confirm  ESC cancel%s\n",
+		len(m.filtered), len(m.items), nSel, refreshStatus)
 
 	return sb.String()
 }
@@ -178,11 +241,13 @@ func (m model) View() string {
 // Run presents the interactive fuzzy multi-select UI and returns the indices
 // (into the original items slice) that the user selected.
 // Returns nil without an error if the user cancels (ESC or Ctrl+C).
-func Run(items []Item) ([]int, error) {
+// refreshFn, if non-nil, is called when the user presses Ctrl+R to reload
+// the item list; previously-selected items are re-selected by Key.
+func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
-	p := tea.NewProgram(newModel(items))
+	p := tea.NewProgram(newModel(items, refreshFn))
 	final, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("selector: %w", err)
