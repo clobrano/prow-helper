@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
 	"github.com/clobrano/prow-helper/internal/prowapi"
@@ -19,6 +20,7 @@ import (
 )
 
 var flagMonitorInterval time.Duration
+var flagMonitorNtfyChannel string
 
 var monitorCmd = &cobra.Command{
 	Use:   "monitor <prow-status-url>",
@@ -47,6 +49,7 @@ Example:
 func init() {
 	monitorCmd.Flags().DurationVar(&flagMonitorInterval, "interval", watcher.DefaultPollInterval,
 		"Polling interval for job status checks")
+	monitorCmd.Flags().StringVar(&flagMonitorNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for push notifications")
 	rootCmd.AddCommand(monitorCmd)
 }
 
@@ -58,6 +61,7 @@ type monitorEntry struct {
 	completionTime time.Time          // zero while still running
 	status         *watcher.JobStatus // nil while still running
 	err            error
+	notified       bool // true once a completion notification has been sent
 }
 
 // formatTimeSuffix returns " (sch: HH:MM, dur: Xm Xs)" when startTime is known.
@@ -170,12 +174,12 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), flagMonitorInterval)
-	return monitorJobs(selected, flagMonitorInterval)
+	return monitorJobs(selected, flagMonitorInterval, flagMonitorNtfyChannel)
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
 // status table after each check round.
-func monitorJobs(entries []*monitorEntry, interval time.Duration) error {
+func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -185,6 +189,7 @@ func monitorJobs(entries []*monitorEntry, interval time.Duration) error {
 
 	// Initial check immediately so we don't wait a full interval before first output.
 	checkAllStatuses(entries)
+	notifyCompletions(entries, ntfyChannel)
 	printStatusTable(entries)
 
 	for {
@@ -200,8 +205,25 @@ func monitorJobs(entries []*monitorEntry, interval time.Duration) error {
 			return nil
 		case <-ticker.C:
 			checkAllStatuses(entries)
+			notifyCompletions(entries, ntfyChannel)
 			printStatusTable(entries)
 		}
+	}
+}
+
+// notifyCompletions sends a desktop and/or ntfy notification for each entry
+// that just transitioned to a finished state and has not yet been notified.
+func notifyCompletions(entries []*monitorEntry, ntfyChannel string) {
+	for _, e := range entries {
+		if e.notified {
+			continue
+		}
+		if e.status == nil || !e.status.Finished {
+			continue
+		}
+		e.notified = true
+		msg := notifier.FormatJobStatusMessage(e.metadata.JobName, e.status.Passed)
+		sendNotificationWithConfig(e.metadata.JobName, msg, e.status.Passed, ntfyChannel, true)
 	}
 }
 
