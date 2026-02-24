@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +14,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
 	"github.com/clobrano/prow-helper/internal/prowapi"
+	"github.com/clobrano/prow-helper/internal/selector"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
 
@@ -31,11 +30,13 @@ The Prow status page is a React SPA — job data is loaded at runtime from the
 /prowjobs.js API. The monitor command calls that API directly and filters by
 any query parameters present in the URL (author, job, state).
 
-The tool presents the discovered jobs and prompts for a selection:
-  all        – monitor every job found
-  none       – exit without monitoring
-  1,3,5      – monitor the jobs at those positions
-  1-3        – monitor a range of jobs
+An interactive fuzzy-search list lets you select which jobs to monitor:
+  Type       – filter the list (fuzzy match against job name / state / build)
+  ↑ / ↓     – move the cursor
+  SPACE      – toggle the job under the cursor
+  A          – select / deselect all visible jobs
+  ENTER      – confirm the selection and start monitoring
+  ESC        – clear the search (first press) or cancel (second press)
 
 Example:
   prow-helper monitor https://prow.ci.openshift.org/?author=clobrano`,
@@ -52,10 +53,14 @@ func init() {
 // monitorEntry holds the parsed metadata for a prow job and its latest known status.
 type monitorEntry struct {
 	metadata *parser.ProwMetadata
-	state    string // original state from the API (triggered, pending, success, …)
+	state    string             // original state from the API (triggered, pending, success, …)
 	status   *watcher.JobStatus // nil while still running
 	err      error
 }
+
+// stateWidth is the column width reserved for Prow state strings.
+// "triggered" (9 chars) is the longest state word.
+const stateWidth = 9
 
 func runMonitor(cmd *cobra.Command, args []string) error {
 	pageURL := args[0]
@@ -66,7 +71,6 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to fetch prow jobs: %w", err)
 	}
-
 	if len(jobs) == 0 {
 		return fmt.Errorf("no prow jobs found (try adjusting the filter parameters in the URL)")
 	}
@@ -84,115 +88,42 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 			state:    j.State,
 		})
 	}
-
 	if len(entries) == 0 {
 		return fmt.Errorf("no valid prow job URLs found")
 	}
 
-	// Display the full list so the user can make an informed choice.
-	fmt.Fprintf(os.Stdout, "\nFound %d prow job(s):\n\n", len(entries))
-	printEntryList(entries)
-	fmt.Println()
+	// Build selector items — one label per entry formatted as the status table.
+	idxWidth := len(fmt.Sprintf("%d", len(entries)))
+	items := make([]selector.Item, len(entries))
+	for i, e := range entries {
+		items[i] = selector.Item{
+			Label: fmt.Sprintf("[%*d] %-*s  %s  %s",
+				idxWidth, i+1,
+				stateWidth, e.state,
+				e.metadata.JobName,
+				e.metadata.BuildID),
+		}
+	}
 
-	selected, err := promptJobSelection(entries)
+	selectedIndices, err := selector.Run(items)
 	if err != nil {
 		return err
 	}
-
-	if len(selected) == 0 {
+	if len(selectedIndices) == 0 {
 		fmt.Println("No jobs selected. Exiting.")
 		return nil
 	}
 
+	// Restore original order (selector returns indices in map-iteration order).
+	sort.Ints(selectedIndices)
+
+	selected := make([]*monitorEntry, len(selectedIndices))
+	for i, idx := range selectedIndices {
+		selected[i] = entries[idx]
+	}
+
 	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), flagMonitorInterval)
 	return monitorJobs(selected, flagMonitorInterval)
-}
-
-// stateWidth is the column width reserved for Prow state strings.
-// "triggered" (9 chars) is the longest state word.
-const stateWidth = 9
-
-// printEntryList prints the indexed job list: [idx] state  job-name  build-id
-func printEntryList(entries []*monitorEntry) {
-	idxWidth := len(fmt.Sprintf("%d", len(entries)))
-	for i, e := range entries {
-		fmt.Fprintf(os.Stdout, "  [%*d] %-*s  %s  %s\n",
-			idxWidth, i+1,
-			stateWidth, e.state,
-			e.metadata.JobName,
-			e.metadata.BuildID)
-	}
-}
-
-// promptJobSelection asks the user which jobs to monitor and returns the chosen subset.
-func promptJobSelection(entries []*monitorEntry) ([]*monitorEntry, error) {
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Printf("Select jobs to monitor [all/none/1,2,3]: ")
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return nil, fmt.Errorf("failed to read selection: %w", err)
-		}
-		input = strings.TrimSpace(input)
-
-		switch strings.ToLower(input) {
-		case "all", "a":
-			return entries, nil
-		case "none", "n", "":
-			return nil, nil
-		default:
-			selected, parseErr := parseSelection(input, entries)
-			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "Invalid selection: %v. Try again.\n", parseErr)
-				continue
-			}
-			return selected, nil
-		}
-	}
-}
-
-// parseSelection converts a comma-separated (with optional ranges) string into
-// a slice of entries. Examples: "1,3,5"  "2-4"  "1,3-5".
-func parseSelection(input string, entries []*monitorEntry) ([]*monitorEntry, error) {
-	seen := make(map[int]bool)
-	var selected []*monitorEntry
-
-	for _, part := range strings.Split(input, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		if strings.Contains(part, "-") {
-			// Range notation: "lo-hi"
-			bounds := strings.SplitN(part, "-", 2)
-			lo, err1 := strconv.Atoi(strings.TrimSpace(bounds[0]))
-			hi, err2 := strconv.Atoi(strings.TrimSpace(bounds[1]))
-			if err1 != nil || err2 != nil || lo < 1 || hi > len(entries) || lo > hi {
-				return nil, fmt.Errorf("invalid range %q (valid: 1-%d)", part, len(entries))
-			}
-			for i := lo; i <= hi; i++ {
-				if !seen[i] {
-					seen[i] = true
-					selected = append(selected, entries[i-1])
-				}
-			}
-		} else {
-			n, err := strconv.Atoi(part)
-			if err != nil || n < 1 || n > len(entries) {
-				return nil, fmt.Errorf("invalid index %q (valid: 1-%d)", part, len(entries))
-			}
-			if !seen[n] {
-				seen[n] = true
-				selected = append(selected, entries[n-1])
-			}
-		}
-	}
-
-	if len(selected) == 0 {
-		return nil, fmt.Errorf("no valid indices found in %q", input)
-	}
-	return selected, nil
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
@@ -266,7 +197,6 @@ func allEntriesDone(entries []*monitorEntry) bool {
 }
 
 // printStatusTable prints the current status of all monitored jobs.
-// Layout mirrors printEntryList: [idx] status  job-name  build-id
 func printStatusTable(entries []*monitorEntry) {
 	fmt.Printf("[%s]\n", time.Now().Format("15:04:05"))
 	idxWidth := len(fmt.Sprintf("%d", len(entries)))
@@ -282,9 +212,9 @@ func printStatusTable(entries []*monitorEntry) {
 		default:
 			statusStr = output.FormatStatus(output.StatusFailed)
 		}
-		fmt.Printf("  [%*d] %s  %s  %s\n",
+		fmt.Printf("  [%*d] %-*s  %s  %s\n",
 			idxWidth, i+1,
-			statusStr,
+			stateWidth, statusStr,
 			e.metadata.JobName,
 			e.metadata.BuildID)
 	}
