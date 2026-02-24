@@ -69,21 +69,12 @@ func (m *model) refilter() {
 	}
 }
 
-// fuzzyMatch returns true if every character of query appears, in order, in target.
-// Both sides are lowercased so matching is case-insensitive.
+// fuzzyMatch returns true if query is a case-insensitive substring of target.
 func fuzzyMatch(query, target string) bool {
 	if query == "" {
 		return true
 	}
-	q := strings.ToLower(query)
-	t := strings.ToLower(target)
-	qi := 0
-	for ti := 0; ti < len(t) && qi < len(q); ti++ {
-		if t[ti] == q[qi] {
-			qi++
-		}
-	}
-	return qi == len(q)
+	return strings.Contains(strings.ToLower(target), strings.ToLower(query))
 }
 
 func (m model) Init() tea.Cmd { return nil }

@@ -13,9 +13,11 @@ func TestFuzzyMatch(t *testing.T) {
 		{"aws", "pull-ci-openshift-e2e-aws-ovn", true},
 		{"gcp", "pull-ci-openshift-e2e-aws-ovn", false},
 		{"OVN", "pull-ci-openshift-e2e-aws-ovn", true},  // case-insensitive
-		{"aon", "pull-ci-openshift-e2e-aws-ovn", true},  // chars in order: a…o…n
-		{"noa", "pull-ci-openshift-e2e-aws-ovn", false}, // wrong order
+		{"aon", "pull-ci-openshift-e2e-aws-ovn", false}, // not a contiguous substring
+		{"noa", "pull-ci-openshift-e2e-aws-ovn", false},
 		{"x", "pull-ci-openshift-e2e-aws-ovn", false},
+		{"pending", "[ 1] pending  some-job-name", true},
+		{"pending", "[ 5] failure  some-job-fencing", false}, // must not match "fencing"
 	}
 	for _, tt := range tests {
 		got := fuzzyMatch(tt.query, tt.target)

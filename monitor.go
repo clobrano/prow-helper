@@ -31,7 +31,7 @@ The Prow status page is a React SPA — job data is loaded at runtime from the
 any query parameters present in the URL (author, job, state).
 
 An interactive fuzzy-search list lets you select which jobs to monitor:
-  Type       – filter the list (fuzzy match against job name / state / build)
+  Type       – filter the list (substring match against job name / state)
   ↑ / ↓     – move the cursor
   SPACE      – toggle the job under the cursor
   Ctrl+A     – select / deselect all visible jobs
