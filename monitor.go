@@ -73,7 +73,7 @@ func formatTimeSuffix(start, end time.Time) string {
 	} else {
 		dur = time.Since(start)
 	}
-	return fmt.Sprintf(" (sch: %s, dur: %s)", start.Local().Format("15:04"), dur.Truncate(time.Second))
+	return fmt.Sprintf(" (sch: %s, dur: %s)", start.Local().Format("Jan 02 15:04"), dur.Truncate(time.Second))
 }
 
 // stateWidth is the column width reserved for Prow state strings.
