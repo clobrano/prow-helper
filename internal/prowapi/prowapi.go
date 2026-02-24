@@ -13,15 +13,17 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // Job holds the fields of a ProwJob that are relevant for monitoring.
 type Job struct {
-	Name    string
-	BuildID string
-	State   string
-	URL     string
-	Author  string
+	Name           string
+	State          string
+	URL            string
+	Author         string
+	StartTime      time.Time // zero if not yet started
+	CompletionTime time.Time // zero if still running
 }
 
 // prowJobList is the top-level structure returned by /prowjobs.js.
@@ -49,9 +51,10 @@ type prowJobPull struct {
 }
 
 type prowJobStatus struct {
-	State   string `json:"state"`
-	URL     string `json:"url"`
-	BuildID string `json:"build_id"`
+	State          string `json:"state"`
+	URL            string `json:"url"`
+	StartTime      string `json:"startTime"`
+	CompletionTime string `json:"completionTime"`
 }
 
 // FetchJobs calls <host>/prowjobs.js and returns the jobs that match the
@@ -120,13 +123,18 @@ func parse(body []byte) ([]Job, error) {
 			continue
 		}
 		j := Job{
-			Name:    pj.Spec.Job,
-			BuildID: pj.Status.BuildID,
-			State:   pj.Status.State,
-			URL:     pj.Status.URL,
+			Name:  pj.Spec.Job,
+			State: pj.Status.State,
+			URL:   pj.Status.URL,
 		}
 		if pj.Spec.Refs != nil && len(pj.Spec.Refs.Pulls) > 0 {
 			j.Author = pj.Spec.Refs.Pulls[0].Author
+		}
+		if pj.Status.StartTime != "" {
+			j.StartTime, _ = time.Parse(time.RFC3339, pj.Status.StartTime)
+		}
+		if pj.Status.CompletionTime != "" {
+			j.CompletionTime, _ = time.Parse(time.RFC3339, pj.Status.CompletionTime)
 		}
 		jobs = append(jobs, j)
 	}

@@ -3,6 +3,7 @@ package prowapi
 import (
 	"net/url"
 	"testing"
+	"time"
 )
 
 const sampleProwJobsJS = `var allBuilds = {
@@ -18,7 +19,8 @@ const sampleProwJobsJS = `var allBuilds = {
       "status": {
         "state": "pending",
         "url": "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/pull-ci-openshift-cno-master-e2e-aws-ovn/1234567890",
-        "build_id": "1234567890"
+        "startTime": "2024-02-24T10:30:00Z",
+        "completionTime": "2024-02-24T10:35:23Z"
       }
     },
     {
@@ -64,8 +66,13 @@ func TestParse(t *testing.T) {
 	if j.Name != "pull-ci-openshift-cno-master-e2e-aws-ovn" {
 		t.Errorf("unexpected job name: %s", j.Name)
 	}
-	if j.BuildID != "1234567890" {
-		t.Errorf("unexpected build ID: %s", j.BuildID)
+	wantStart, _ := time.Parse(time.RFC3339, "2024-02-24T10:30:00Z")
+	if !j.StartTime.Equal(wantStart) {
+		t.Errorf("unexpected start time: %v", j.StartTime)
+	}
+	wantEnd, _ := time.Parse(time.RFC3339, "2024-02-24T10:35:23Z")
+	if !j.CompletionTime.Equal(wantEnd) {
+		t.Errorf("unexpected completion time: %v", j.CompletionTime)
 	}
 	if j.Author != "clobrano" {
 		t.Errorf("unexpected author: %s", j.Author)

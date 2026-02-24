@@ -52,10 +52,28 @@ func init() {
 
 // monitorEntry holds the parsed metadata for a prow job and its latest known status.
 type monitorEntry struct {
-	metadata *parser.ProwMetadata
-	state    string             // original state from the API (triggered, pending, success, …)
-	status   *watcher.JobStatus // nil while still running
-	err      error
+	metadata       *parser.ProwMetadata
+	state          string             // original state from the API (triggered, pending, success, …)
+	startTime      time.Time          // zero if the API did not provide one
+	completionTime time.Time          // zero while still running
+	status         *watcher.JobStatus // nil while still running
+	err            error
+}
+
+// formatTimeSuffix returns " (sch: HH:MM, dur: Xm Xs)" when startTime is known.
+// end should be the completion time for finished jobs, or zero for running ones
+// (in which case the elapsed time up to now is used).
+func formatTimeSuffix(start, end time.Time) string {
+	if start.IsZero() {
+		return ""
+	}
+	var dur time.Duration
+	if !end.IsZero() {
+		dur = end.Sub(start)
+	} else {
+		dur = time.Since(start)
+	}
+	return fmt.Sprintf(" (sch: %s, dur: %s)", start.Local().Format("15:04"), dur.Truncate(time.Second))
 }
 
 // stateWidth is the column width reserved for Prow state strings.
@@ -84,8 +102,10 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		entries = append(entries, &monitorEntry{
-			metadata: meta,
-			state:    j.State,
+			metadata:       meta,
+			state:          j.State,
+			startTime:      j.StartTime,
+			completionTime: j.CompletionTime,
 		})
 	}
 	if len(entries) == 0 {
@@ -97,11 +117,11 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	items := make([]selector.Item, len(entries))
 	for i, e := range entries {
 		items[i] = selector.Item{
-			Label: fmt.Sprintf("[%*d] %-*s  %s  %s",
+			Label: fmt.Sprintf("[%*d] %-*s  %s%s",
 				idxWidth, i+1,
 				stateWidth, e.state,
 				e.metadata.JobName,
-				e.metadata.BuildID),
+				formatTimeSuffix(e.startTime, e.completionTime)),
 		}
 	}
 
@@ -212,11 +232,16 @@ func printStatusTable(entries []*monitorEntry) {
 		default:
 			statusStr = output.FormatStatus(output.StatusFailed)
 		}
-		fmt.Printf("  [%*d] %-*s  %s  %s\n",
+		// For running jobs use live elapsed time; for finished use the watcher timestamp.
+		var endTime time.Time
+		if e.status != nil && e.status.Finished {
+			endTime = e.status.Timestamp
+		}
+		fmt.Printf("  [%*d] %-*s  %s%s\n",
 			idxWidth, i+1,
 			stateWidth, statusStr,
 			e.metadata.JobName,
-			e.metadata.BuildID)
+			formatTimeSuffix(e.startTime, endTime))
 	}
 	fmt.Println()
 }
