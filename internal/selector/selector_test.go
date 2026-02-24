@@ -81,7 +81,7 @@ func TestToggleAll(t *testing.T) {
 	}
 }
 
-// toggleAll simulates pressing "A" by calling the same logic used in Update.
+// toggleAll simulates pressing Ctrl+A by calling the same logic used in Update.
 func toggleAll(m model) (model, bool) {
 	allSelected := true
 	for _, fi := range m.filtered {

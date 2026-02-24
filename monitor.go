@@ -34,7 +34,7 @@ An interactive fuzzy-search list lets you select which jobs to monitor:
   Type       – filter the list (fuzzy match against job name / state / build)
   ↑ / ↓     – move the cursor
   SPACE      – toggle the job under the cursor
-  A          – select / deselect all visible jobs
+  Ctrl+A     – select / deselect all visible jobs
   ENTER      – confirm the selection and start monitoring
   ESC        – clear the search (first press) or cancel (second press)
 

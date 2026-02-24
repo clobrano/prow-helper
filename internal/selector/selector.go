@@ -118,25 +118,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refilter()
 			}
 
-		case tea.KeyRunes:
-			switch strings.ToLower(string(msg.Runes)) {
-			case "a":
-				// Toggle all visible items.  If any are unselected, select all;
-				// if all are already selected, deselect all.
-				allSelected := true
-				for _, fi := range m.filtered {
-					if !m.selected[fi] {
-						allSelected = false
-						break
-					}
+		case tea.KeyCtrlA:
+			// Toggle all visible items.  If any are unselected, select all;
+			// if all are already selected, deselect all.
+			allSelected := true
+			for _, fi := range m.filtered {
+				if !m.selected[fi] {
+					allSelected = false
+					break
 				}
-				for _, fi := range m.filtered {
-					m.selected[fi] = !allSelected
-				}
-			default:
-				m.query += string(msg.Runes)
-				m.refilter()
 			}
+			for _, fi := range m.filtered {
+				m.selected[fi] = !allSelected
+			}
+
+		case tea.KeyRunes:
+			m.query += string(msg.Runes)
+			m.refilter()
 		}
 	}
 	return m, nil
@@ -171,7 +169,7 @@ func (m model) View() string {
 			nSel++
 		}
 	}
-	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  A all  ENTER confirm  ESC cancel\n",
+	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all  ENTER confirm  ESC cancel\n",
 		len(m.filtered), len(m.items), nSel)
 
 	return sb.String()
