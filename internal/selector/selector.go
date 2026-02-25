@@ -38,6 +38,8 @@ type model struct {
 	refreshing  bool
 	refreshErr  error
 	lastRefresh time.Time
+	height      int // terminal height (0 = unknown)
+	width       int // terminal width (0 = unknown)
 }
 
 func newModel(items []Item, refreshFn func() ([]Item, error)) model {
@@ -79,8 +81,52 @@ func fuzzyMatch(query, target string) bool {
 
 func (m model) Init() tea.Cmd { return nil }
 
+// viewOverhead is the number of terminal rows consumed by the header and
+// footer, i.e. lines that are not list items:
+//
+//	blank line + "Search:" line + blank line  (header, 3 rows)
+//	blank line + footer line                  (footer, 2 rows)
+const viewOverhead = 5
+
+// visibleLines returns how many list-item rows can be rendered within the
+// current terminal height.  Falls back to showing all items when the terminal
+// height is not yet known (zero).
+func (m model) visibleLines() int {
+	if m.height == 0 {
+		return len(m.filtered)
+	}
+	vis := m.height - viewOverhead
+	if vis < 1 {
+		vis = 1
+	}
+	return vis
+}
+
+// viewportStart returns the index (into m.filtered) of the first item that
+// should be rendered, keeping m.cursor always within the visible window.
+func (m model) viewportStart() int {
+	vis := m.visibleLines()
+	if m.cursor < vis {
+		return 0
+	}
+	start := m.cursor - vis + 1
+	maxStart := len(m.filtered) - vis
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	if start > maxStart {
+		start = maxStart
+	}
+	return start
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.width = msg.Width
+		return m, nil
+
 	case refreshMsg:
 		m.refreshing = false
 		if msg.err != nil {
@@ -189,20 +235,29 @@ func (m model) View() string {
 	// Search bar.
 	fmt.Fprintf(&sb, "\n  Search: %s▌\n\n", m.query)
 
-	// Job rows.
-	for i, fi := range m.filtered {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = "> "
-		}
-		check := "[ ]"
-		if m.selected[fi] {
-			check = "[x]"
-		}
-		fmt.Fprintf(&sb, "  %s%s  %s\n", cursor, check, m.items[fi].Label)
-	}
+	// Job rows — only render the viewport slice so the line count returned by
+	// View() stays within the terminal height and bubbletea can redraw without
+	// ghosting old content.
 	if len(m.filtered) == 0 {
 		sb.WriteString("  (no matches)\n")
+	} else {
+		start := m.viewportStart()
+		end := start + m.visibleLines()
+		if end > len(m.filtered) {
+			end = len(m.filtered)
+		}
+		for i := start; i < end; i++ {
+			fi := m.filtered[i]
+			cursor := "  "
+			if i == m.cursor {
+				cursor = "> "
+			}
+			check := "[ ]"
+			if m.selected[fi] {
+				check = "[x]"
+			}
+			fmt.Fprintf(&sb, "  %s%s  %s\n", cursor, check, m.items[fi].Label)
+		}
 	}
 
 	// Footer.
@@ -238,7 +293,7 @@ func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
-	p := tea.NewProgram(newModel(items, refreshFn))
+	p := tea.NewProgram(newModel(items, refreshFn), tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		return nil, fmt.Errorf("selector: %w", err)

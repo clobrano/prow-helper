@@ -1,6 +1,9 @@
 package selector
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestFuzzyMatch(t *testing.T) {
 	tests := []struct {
@@ -108,5 +111,60 @@ func TestCursorBoundaries(t *testing.T) {
 	m.refilter()
 	if m.cursor != 0 {
 		t.Errorf("cursor should clamp to 0, got %d", m.cursor)
+	}
+}
+
+func TestVisibleLines(t *testing.T) {
+	items := []Item{{Label: "a"}, {Label: "b"}, {Label: "c"}}
+	m := newModel(items, nil)
+
+	// Height not set yet — show all filtered items.
+	if got := m.visibleLines(); got != 3 {
+		t.Errorf("visibleLines with height=0: got %d, want 3", got)
+	}
+
+	// Height smaller than overhead — at least 1 item.
+	m.height = 2
+	if got := m.visibleLines(); got != 1 {
+		t.Errorf("visibleLines with height=2 (< overhead): got %d, want 1", got)
+	}
+
+	// Normal height: height - overhead rows for items.
+	m.height = 20
+	if got := m.visibleLines(); got != 20-viewOverhead {
+		t.Errorf("visibleLines with height=20: got %d, want %d", got, 20-viewOverhead)
+	}
+}
+
+func TestViewportStart(t *testing.T) {
+	items := make([]Item, 20)
+	for i := range items {
+		items[i] = Item{Label: fmt.Sprintf("item%d", i)}
+	}
+	m := newModel(items, nil)
+	m.height = viewOverhead + 5 // 5 visible rows
+
+	// Cursor within first page — viewport starts at 0.
+	m.cursor = 3
+	if got := m.viewportStart(); got != 0 {
+		t.Errorf("cursor=3, vis=5: viewportStart=%d, want 0", got)
+	}
+
+	// Cursor at exactly vis-1 — still starts at 0.
+	m.cursor = 4
+	if got := m.viewportStart(); got != 0 {
+		t.Errorf("cursor=4, vis=5: viewportStart=%d, want 0", got)
+	}
+
+	// Cursor one past the first visible page — viewport must scroll.
+	m.cursor = 5
+	if got := m.viewportStart(); got != 1 {
+		t.Errorf("cursor=5, vis=5: viewportStart=%d, want 1", got)
+	}
+
+	// Cursor at the last item — viewport shows last 5 items.
+	m.cursor = 19
+	if got := m.viewportStart(); got != 15 {
+		t.Errorf("cursor=19, vis=5: viewportStart=%d, want 15", got)
 	}
 }
