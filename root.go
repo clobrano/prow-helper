@@ -163,6 +163,9 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 
 	output.PrintField(os.Stdout, "Job", metadata.JobName)
+	if metadata.PRRef != "" {
+		output.PrintField(os.Stdout, "PR", metadata.PRRef)
+	}
 	output.PrintField(os.Stdout, "Build ID", metadata.BuildID)
 
 	// Step 3: Load configuration
@@ -187,37 +190,44 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		output.PrintField(os.Stdout, "Ntfy channel", cfg.NtfyChannel)
 	}
 
+	// jobDisplay combines the PR reference (when available) with the job name for
+	// use in console output and notification titles/messages.
+	jobDisplay := metadata.JobName
+	if metadata.PRRef != "" {
+		jobDisplay = metadata.PRRef + " " + metadata.JobName
+	}
+
 	// Step 4: If watch mode, poll until job completes
 	if flagWatch {
 		status, err := watcher.Watch(metadata, watcher.DefaultPollInterval, os.Stdout)
 		if err != nil {
 			errMsg := fmt.Sprintf("Watch failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
-			sendNotificationWithConfig(metadata.JobName, errMsg, false, cfg.NtfyChannel, true)
+			sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, true)
 			os.Exit(ExitWatchFailed)
 			return nil
 		}
 
 		if !status.Passed {
 			// Job failed
-			msg := output.FormatJobStatusMessage(metadata.JobName, false)
+			msg := output.FormatJobStatusMessage(jobDisplay, false)
 			fmt.Println(msg)
 
 			// If no analyze command, just notify and exit
 			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, false), false, cfg.NtfyChannel, true)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, false), false, cfg.NtfyChannel, true)
 				os.Exit(ExitJobFailed)
 				return nil
 			}
 			// If analyze command is set, continue to download artifacts for analysis
 		} else {
 			// Job passed
-			msg := output.FormatJobStatusMessage(metadata.JobName, true)
+			msg := output.FormatJobStatusMessage(jobDisplay, true)
 			fmt.Println(msg)
 
 			// If no analyze command, just notify and exit
 			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(metadata.JobName, notifier.FormatJobStatusMessage(metadata.JobName, true), true, cfg.NtfyChannel, true)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, true), true, cfg.NtfyChannel, true)
 				return nil
 			}
 			// If analyze command is set, continue to download artifacts for analysis
@@ -229,7 +239,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to resolve destination: %v", err)
 		fmt.Fprintln(os.Stderr, errMsg)
-		sendNotificationWithConfig("Destination", errMsg, false, cfg.NtfyChannel, sendNotification)
+		sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, sendNotification)
 		os.Exit(ExitDownloadFailed)
 		return nil
 	}
@@ -242,14 +252,14 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 		// Notify download start
 		if sendNotification || cfg.NtfyChannel != "" {
-			sendNotificationWithConfig(metadata.JobName, notifier.FormatDownloadStartMessage(metadata.JobName), true, cfg.NtfyChannel, sendNotification)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadStartMessage(jobDisplay), true, cfg.NtfyChannel, sendNotification)
 		}
 
 		gcsPath := "gs://" + metadata.Bucket + "/" + metadata.Path
 		if err := downloader.Download(gcsPath, destPath, os.Stdout, os.Stderr); err != nil {
 			errMsg := fmt.Sprintf("Download failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
-			sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
 			os.Exit(ExitDownloadFailed)
 			return nil
 		}
@@ -268,7 +278,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 		// Notify download complete (only if we will run analysis)
 		if (sendNotification || cfg.NtfyChannel != "") && cfg.AnalyzeCmd != "" {
-			sendNotificationWithConfig(metadata.JobName, notifier.FormatDownloadCompleteMessage(metadata.JobName, destPath), true, cfg.NtfyChannel, sendNotification)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadCompleteMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
 		}
 	}
 
@@ -278,22 +288,22 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 		// Notify analysis start
 		if sendNotification || cfg.NtfyChannel != "" {
-			sendNotificationWithConfig(metadata.JobName, notifier.FormatAnalysisStartMessage(metadata.JobName, cfg.AnalyzeCmd), true, cfg.NtfyChannel, sendNotification)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatAnalysisStartMessage(jobDisplay, cfg.AnalyzeCmd), true, cfg.NtfyChannel, sendNotification)
 		}
 
 		if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
 			errMsg := fmt.Sprintf("Analysis failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
-			sendNotificationWithConfig(metadata.JobName, notifier.FormatFailureMessage(metadata.JobName, err), false, cfg.NtfyChannel, sendNotification)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
 			os.Exit(ExitAnalysisFailed)
 			return nil
 		}
 
 		fmt.Println("Analysis complete!")
 
-		sendNotificationWithConfig(metadata.JobName, notifier.FormatAnalysisSuccessMessage(metadata.JobName, destPath), true, cfg.NtfyChannel, sendNotification)
+		sendNotificationWithConfig(jobDisplay, notifier.FormatAnalysisSuccessMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
 	} else {
-		sendNotificationWithConfig(metadata.JobName, notifier.FormatDownloadOnlyMessage(metadata.JobName, destPath), true, cfg.NtfyChannel, sendNotification)
+		sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadOnlyMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
 	}
 
 	return nil

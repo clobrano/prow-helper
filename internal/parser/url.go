@@ -26,6 +26,7 @@ type ProwMetadata struct {
 	Path     string // Full GCS path after bucket (e.g., "logs/job-name/build-id")
 	JobName  string // Job name extracted from path
 	BuildID  string // Build ID (last component of path)
+	PRRef    string // "[org/repo PR<num>]" for PR jobs, empty for others
 	RawURL   string // Original URL
 }
 
@@ -98,11 +99,24 @@ func ParseURL(rawURL string) (*ProwMetadata, error) {
 	// Job name is the second-to-last component
 	jobName := parts[len(parts)-2]
 
+	// Extract PR reference for pr-logs paths:
+	// pr-logs/pull/<org_repo>/<pr_num>/<job_name>/<build_id>
+	var prRef string
+	if len(parts) >= 6 && parts[1] == "pr-logs" && parts[2] == "pull" {
+		orgRepo := parts[3]
+		prNum := parts[4]
+		orgRepoParts := strings.SplitN(orgRepo, "_", 2)
+		if len(orgRepoParts) == 2 && prNum != "" {
+			prRef = "[" + orgRepoParts[0] + "/" + orgRepoParts[1] + " PR" + prNum + "]"
+		}
+	}
+
 	return &ProwMetadata{
 		Bucket:  bucket,
 		Path:    path,
 		JobName: jobName,
 		BuildID: buildID,
+		PRRef:   prRef,
 		RawURL:  rawURL,
 	}, nil
 }

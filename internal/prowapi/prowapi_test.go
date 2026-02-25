@@ -13,6 +13,8 @@ const sampleProwJobsJS = `var allBuilds = {
         "job": "pull-ci-openshift-cno-master-e2e-aws-ovn",
         "type": "presubmit",
         "refs": {
+          "org": "openshift",
+          "repo": "cno",
           "pulls": [{"author": "clobrano", "number": 42, "sha": "abc"}]
         }
       },
@@ -28,6 +30,8 @@ const sampleProwJobsJS = `var allBuilds = {
         "job": "pull-ci-openshift-cno-master-unit",
         "type": "presubmit",
         "refs": {
+          "org": "openshift",
+          "repo": "cno",
           "pulls": [{"author": "other-user", "number": 43, "sha": "def"}]
         }
       },
@@ -80,10 +84,16 @@ func TestParse(t *testing.T) {
 	if j.State != "pending" {
 		t.Errorf("unexpected state: %s", j.State)
 	}
+	if j.PRRef != "[openshift/cno PR42]" {
+		t.Errorf("unexpected PRRef: %s", j.PRRef)
+	}
 
-	// Periodic job has no pulls so Author must be empty.
+	// Periodic job has no pulls so Author and PRRef must be empty.
 	if jobs[2].Author != "" {
 		t.Errorf("periodic job should have empty author, got: %s", jobs[2].Author)
+	}
+	if jobs[2].PRRef != "" {
+		t.Errorf("periodic job should have empty PRRef, got: %s", jobs[2].PRRef)
 	}
 }
 
