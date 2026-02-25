@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/clobrano/prow-helper/internal/config"
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
@@ -125,7 +126,18 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 func runMonitor(cmd *cobra.Command, args []string) error {
 	pageURL := args[0]
 
+	// Load configuration so ntfy channel can come from env var / config file
+	// when not explicitly set via the --ntfy-channel flag.
+	cfg, err := config.Load(&config.Config{NtfyChannel: flagMonitorNtfyChannel})
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+	ntfyChannel := cfg.NtfyChannel
+
 	fmt.Fprintf(os.Stdout, "Fetching prow jobs from %s...\n", pageURL)
+	if ntfyChannel != "" {
+		fmt.Fprintf(os.Stdout, "Ntfy channel: %s\n", ntfyChannel)
+	}
 
 	jobs, err := prowapi.FetchJobs(pageURL)
 	if err != nil {
@@ -174,7 +186,7 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), flagMonitorInterval)
-	return monitorJobs(selected, flagMonitorInterval, flagMonitorNtfyChannel)
+	return monitorJobs(selected, flagMonitorInterval, ntfyChannel)
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
