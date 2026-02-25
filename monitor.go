@@ -115,7 +115,7 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 	for i, e := range entries {
 		jobDisplay := e.metadata.JobName
 		if e.prRef != "" {
-			jobDisplay += " " + e.prRef
+			jobDisplay = e.prRef + " " + e.metadata.JobName
 		}
 		items[i] = selector.Item{
 			Key: keys[i],
@@ -322,7 +322,7 @@ func printStatusTable(entries []*monitorEntry) {
 		}
 		jobDisplay := e.metadata.JobName
 		if e.prRef != "" {
-			jobDisplay += " " + e.prRef
+			jobDisplay = e.prRef + " " + e.metadata.JobName
 		}
 		fmt.Printf("  [%*d] %-*s  %s%s\n",
 			idxWidth, i+1,
