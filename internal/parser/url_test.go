@@ -75,6 +75,7 @@ func TestParseURL(t *testing.T) {
 		wantPath    string
 		wantJobName string
 		wantBuildID string
+		wantPRRef   string
 		wantErr     bool
 	}{
 		{
@@ -84,6 +85,7 @@ func TestParseURL(t *testing.T) {
 			wantPath:    "logs/periodic-ci-openshift-release-master-nightly-4.22-e2e-metal-ovn-two-node-fencing-recovery-techpreview/2013057817195319296",
 			wantJobName: "periodic-ci-openshift-release-master-nightly-4.22-e2e-metal-ovn-two-node-fencing-recovery-techpreview",
 			wantBuildID: "2013057817195319296",
+			wantPRRef:   "",
 			wantErr:     false,
 		},
 		{
@@ -93,6 +95,7 @@ func TestParseURL(t *testing.T) {
 			wantPath:    "logs/pull-ci-openshift-origin-master-e2e-aws/12345",
 			wantJobName: "pull-ci-openshift-origin-master-e2e-aws",
 			wantBuildID: "12345",
+			wantPRRef:   "",
 			wantErr:     false,
 		},
 		{
@@ -102,6 +105,7 @@ func TestParseURL(t *testing.T) {
 			wantPath:    "pr-logs/pull/openshift_origin/12345/pull-ci-openshift-origin-master-e2e-aws/67890",
 			wantJobName: "pull-ci-openshift-origin-master-e2e-aws",
 			wantBuildID: "67890",
+			wantPRRef:   "[openshift/origin PR12345]",
 			wantErr:     false,
 		},
 		{
@@ -137,6 +141,9 @@ func TestParseURL(t *testing.T) {
 			}
 			if metadata.BuildID != tt.wantBuildID {
 				t.Errorf("ParseURL() BuildID = %v, want %v", metadata.BuildID, tt.wantBuildID)
+			}
+			if metadata.PRRef != tt.wantPRRef {
+				t.Errorf("ParseURL() PRRef = %v, want %v", metadata.PRRef, tt.wantPRRef)
 			}
 		})
 	}

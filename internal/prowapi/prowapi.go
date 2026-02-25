@@ -22,6 +22,7 @@ type Job struct {
 	State          string
 	URL            string
 	Author         string
+	PRRef          string    // "[org/repo PR<num>]" for presubmit jobs, "" otherwise
 	StartTime      time.Time // zero if not yet started
 	CompletionTime time.Time // zero if still running
 }
@@ -43,11 +44,14 @@ type prowJobSpec struct {
 }
 
 type prowJobRefs struct {
+	Org   string        `json:"org"`
+	Repo  string        `json:"repo"`
 	Pulls []prowJobPull `json:"pulls"`
 }
 
 type prowJobPull struct {
 	Author string `json:"author"`
+	Number int    `json:"number"`
 }
 
 type prowJobStatus struct {
@@ -129,6 +133,9 @@ func parse(body []byte) ([]Job, error) {
 		}
 		if pj.Spec.Refs != nil && len(pj.Spec.Refs.Pulls) > 0 {
 			j.Author = pj.Spec.Refs.Pulls[0].Author
+			if pj.Spec.Refs.Org != "" && pj.Spec.Refs.Repo != "" && pj.Spec.Refs.Pulls[0].Number > 0 {
+				j.PRRef = fmt.Sprintf("[%s/%s PR%d]", pj.Spec.Refs.Org, pj.Spec.Refs.Repo, pj.Spec.Refs.Pulls[0].Number)
+			}
 		}
 		if pj.Status.StartTime != "" {
 			j.StartTime, _ = time.Parse(time.RFC3339, pj.Status.StartTime)

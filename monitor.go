@@ -57,6 +57,7 @@ func init() {
 // monitorEntry holds the parsed metadata for a prow job and its latest known status.
 type monitorEntry struct {
 	metadata       *parser.ProwMetadata
+	prRef          string             // "[org/repo PR<num>]" or "" for non-PR jobs
 	state          string             // original state from the API (triggered, pending, success, …)
 	startTime      time.Time          // zero if the API did not provide one
 	completionTime time.Time          // zero while still running
@@ -99,6 +100,7 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 		}
 		entries = append(entries, &monitorEntry{
 			metadata:       meta,
+			prRef:          j.PRRef,
 			state:          j.State,
 			startTime:      j.StartTime,
 			completionTime: j.CompletionTime,
@@ -111,12 +113,16 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 	idxWidth := len(fmt.Sprintf("%d", len(entries)))
 	items := make([]selector.Item, len(entries))
 	for i, e := range entries {
+		jobDisplay := e.metadata.JobName
+		if e.prRef != "" {
+			jobDisplay += " " + e.prRef
+		}
 		items[i] = selector.Item{
 			Key: keys[i],
 			Label: fmt.Sprintf("[%*d] %-*s  %s%s",
 				idxWidth, i+1,
 				stateWidth, e.state,
-				e.metadata.JobName,
+				jobDisplay,
 				formatTimeSuffix(e.startTime, e.completionTime)),
 		}
 	}
@@ -246,8 +252,12 @@ func notifyCompletions(entries []*monitorEntry, ntfyChannel string) {
 			continue
 		}
 		e.notified = true
-		msg := notifier.FormatJobStatusMessage(e.metadata.JobName, e.status.Passed)
-		sendNotificationWithConfig(e.metadata.JobName, msg, e.status.Passed, ntfyChannel, true)
+		jobDisplay := e.metadata.JobName
+		if e.prRef != "" {
+			jobDisplay = e.prRef + " " + jobDisplay
+		}
+		msg := notifier.FormatJobStatusMessage(jobDisplay, e.status.Passed)
+		sendNotificationWithConfig(jobDisplay, msg, e.status.Passed, ntfyChannel, true)
 	}
 }
 
@@ -310,10 +320,14 @@ func printStatusTable(entries []*monitorEntry) {
 		if e.status != nil && e.status.Finished {
 			endTime = e.status.Timestamp
 		}
+		jobDisplay := e.metadata.JobName
+		if e.prRef != "" {
+			jobDisplay += " " + e.prRef
+		}
 		fmt.Printf("  [%*d] %-*s  %s%s\n",
 			idxWidth, i+1,
 			stateWidth, statusStr,
-			e.metadata.JobName,
+			jobDisplay,
 			formatTimeSuffix(e.startTime, endTime))
 	}
 	fmt.Println()
