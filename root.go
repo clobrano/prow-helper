@@ -352,7 +352,9 @@ func sendNotificationWithConfig(title, message string, success bool, ntfyChannel
 	}
 
 	if sendDesktop {
-		notifier.Notify(title, message, success)
+		if err := notifier.Notify(title, message, success); err != nil {
+			fmt.Printf("Warning: desktop notification failed: %v\n", err)
+		}
 	}
 }
 
