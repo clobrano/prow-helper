@@ -266,16 +266,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 		fmt.Println("Download complete!")
 
-		// Step 5.5: Rename folder with date prefix from started.json
-		newDestPath, err := downloader.RenameWithDatePrefix(destPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Failed to rename folder with date prefix: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Continuing with original folder name...")
-		} else {
-			fmt.Printf("Renamed folder to: %s\n", newDestPath)
-			destPath = newDestPath // Update destPath for analysis
-		}
-
 		// Notify download complete (only if we will run analysis)
 		if (sendNotification || cfg.NtfyChannel != "") && cfg.AnalyzeCmd != "" {
 			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadCompleteMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
