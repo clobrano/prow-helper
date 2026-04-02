@@ -174,3 +174,43 @@ func filter(jobs []Job, q url.Values) []Job {
 	}
 	return result
 }
+
+// FetchJobsForPR calls <prowHost>/prowjobs.js and returns only the jobs
+// that match the given org, repo, and PR number.
+func FetchJobsForPR(prowHost, org, repo string, prNumber int) ([]Job, error) {
+	apiURL := fmt.Sprintf("https://%s/prowjobs.js?omit=annotations,labels,decoration_config,pod_spec", prowHost)
+
+	resp, err := http.Get(apiURL) //nolint:noctx
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch prowjobs.js: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("prowjobs.js returned HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	jobs, err := parse(body)
+	if err != nil {
+		return nil, err
+	}
+
+	return filterByPR(jobs, org, repo, prNumber), nil
+}
+
+// filterByPR returns only jobs whose refs match the given org, repo, and PR number.
+func filterByPR(jobs []Job, org, repo string, prNumber int) []Job {
+	wantRef := fmt.Sprintf("[%s/%s PR%d]", org, repo, prNumber)
+	result := make([]Job, 0)
+	for _, j := range jobs {
+		if j.PRRef == wantRef {
+			result = append(result, j)
+		}
+	}
+	return result
+}

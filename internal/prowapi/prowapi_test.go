@@ -115,6 +115,33 @@ func TestParseStripsJSPrefix(t *testing.T) {
 	}
 }
 
+func TestFilterByPR(t *testing.T) {
+	jobs, _ := parse([]byte(sampleProwJobsJS))
+
+	tests := []struct {
+		name      string
+		org       string
+		repo      string
+		prNumber  int
+		wantCount int
+	}{
+		{"matching PR", "openshift", "cno", 42, 1},
+		{"different PR number", "openshift", "cno", 99, 0},
+		{"different repo", "openshift", "other", 42, 0},
+		{"different org", "redhat", "cno", 42, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterByPR(jobs, tt.org, tt.repo, tt.prNumber)
+			if len(result) != tt.wantCount {
+				t.Errorf("filterByPR(%s, %s, %d): got %d jobs, want %d",
+					tt.org, tt.repo, tt.prNumber, len(result), tt.wantCount)
+			}
+		})
+	}
+}
+
 func TestFilter(t *testing.T) {
 	jobs, _ := parse([]byte(sampleProwJobsJS))
 

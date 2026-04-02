@@ -17,6 +17,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
+	"github.com/clobrano/prow-helper/internal/prowapi"
 	"github.com/clobrano/prow-helper/internal/resolver"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
@@ -44,23 +45,26 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "prow-helper <prow-url>",
+	Use:   "prow-helper <prow-url|github-pr-url>",
 	Short: "Download and analyze PROW CI test artifacts",
 	Long: `prow-helper automates the workflow of downloading PROW CI test artifacts
 and running analysis on them.
 
 It takes a PROW test URL (e.g., https://prow.ci.openshift.org/view/gs/...),
-downloads the artifacts using gsutil, and optionally runs a configured
-analysis command on the downloaded files.
+a GitHub pull request URL (e.g., https://github.com/org/repo/pull/123),
+or any page containing prow job links.
+
+When given a GitHub PR URL, it queries the Prow API for jobs associated
+with that PR and lets you select which one to work with.
 
 Example:
   prow-helper https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345
 
+  prow-helper https://github.com/openshift/cno/pull/42
+
   prow-helper --dest ~/artifacts --analyze-cmd "my-analyzer" <url>
 
-  prow-helper --background <url>
-
-  prow-helper --watch <url>
+  prow-helper --watch https://github.com/openshift/cno/pull/42
 
   prow-helper --watch --ntfy-channel my-channel <url>`,
 	Args: cobra.ExactArgs(1),
@@ -134,20 +138,36 @@ func runInBackground(args []string) error {
 // executeWorkflow runs the main download and analysis workflow
 func executeWorkflow(prowURL string, sendNotification bool) error {
 
-	// Step 1: Validate URL; if not a direct prow URL, try to resolve it from the page
+	// Step 1: Validate URL; if not a direct prow URL, try to resolve it
 	if err := parser.ValidateURL(prowURL); err != nil {
-		fmt.Fprintf(os.Stdout, "Not a direct prow URL (%v), attempting to find prow job link on page...\n", err)
-		resolved, resolveErr := resolveProwURL(prowURL)
-		if resolveErr != nil {
-			errMsg := fmt.Sprintf("Invalid PROW URL and could not resolve prow job link: %v", resolveErr)
-			fmt.Fprintln(os.Stderr, errMsg)
-			if sendNotification {
-				notifier.Notify("URL Validation", errMsg, false)
+		// Check if it's a GitHub PR URL first
+		if pr := resolver.ParseGitHubPRURL(prowURL); pr != nil {
+			fmt.Fprintf(os.Stdout, "GitHub PR detected: %s/%s #%d — fetching prow jobs...\n", pr.Org, pr.Repo, pr.Number)
+			resolved, resolveErr := resolveGitHubPR(pr)
+			if resolveErr != nil {
+				errMsg := fmt.Sprintf("Could not find prow jobs for PR: %v", resolveErr)
+				fmt.Fprintln(os.Stderr, errMsg)
+				if sendNotification {
+					notifier.Notify("URL Validation", errMsg, false)
+				}
+				os.Exit(ExitInvalidURL)
+				return nil
 			}
-			os.Exit(ExitInvalidURL)
-			return nil
+			prowURL = resolved
+		} else {
+			fmt.Fprintf(os.Stdout, "Not a direct prow URL (%v), attempting to find prow job link on page...\n", err)
+			resolved, resolveErr := resolveProwURL(prowURL)
+			if resolveErr != nil {
+				errMsg := fmt.Sprintf("Invalid PROW URL and could not resolve prow job link: %v", resolveErr)
+				fmt.Fprintln(os.Stderr, errMsg)
+				if sendNotification {
+					notifier.Notify("URL Validation", errMsg, false)
+				}
+				os.Exit(ExitInvalidURL)
+				return nil
+			}
+			prowURL = resolved
 		}
-		prowURL = resolved
 	}
 
 	// Step 2: Parse URL to get metadata
@@ -297,6 +317,47 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 
 	return nil
+}
+
+// prowHost is the default Prow instance used when resolving GitHub PR URLs.
+const prowHost = "prow.ci.openshift.org"
+
+// resolveGitHubPR queries the Prow API for jobs matching the given GitHub PR
+// and lets the user select one when multiple are found.
+func resolveGitHubPR(pr *resolver.GitHubPR) (string, error) {
+	jobs, err := prowapi.FetchJobsForPR(prowHost, pr.Org, pr.Repo, pr.Number)
+	if err != nil {
+		return "", err
+	}
+	if len(jobs) == 0 {
+		return "", fmt.Errorf("no prow jobs found for %s/%s#%d", pr.Org, pr.Repo, pr.Number)
+	}
+
+	if len(jobs) == 1 {
+		fmt.Printf("Found prow job: %s (%s)\n", jobs[0].Name, jobs[0].State)
+		return jobs[0].URL, nil
+	}
+
+	// Multiple jobs: let the user choose
+	fmt.Printf("Found %d prow jobs for %s/%s#%d:\n", len(jobs), pr.Org, pr.Repo, pr.Number)
+	for i, j := range jobs {
+		fmt.Printf("  [%d] %-12s %s\n", i+1, j.State, j.Name)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("Select a job [1-%d]: ", len(jobs))
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return "", fmt.Errorf("failed to read selection: %w", err)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(input))
+		if err != nil || n < 1 || n > len(jobs) {
+			fmt.Printf("Invalid selection, please enter a number between 1 and %d\n", len(jobs))
+			continue
+		}
+		return jobs[n-1].URL, nil
+	}
 }
 
 // resolveProwURL fetches the given URL and extracts a prow job link from the page.

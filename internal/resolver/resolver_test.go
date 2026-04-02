@@ -7,6 +7,93 @@ import (
 	"testing"
 )
 
+func TestParseGitHubPRURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		url    string
+		want   *GitHubPR
+	}{
+		{
+			name: "standard PR URL",
+			url:  "https://github.com/openshift/cno/pull/42",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "PR URL with trailing slash",
+			url:  "https://github.com/openshift/release/pull/123/",
+			want: &GitHubPR{Org: "openshift", Repo: "release", Number: 123},
+		},
+		{
+			name: "PR URL with files tab",
+			url:  "https://github.com/openshift/cno/pull/42/files",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "PR URL with checks tab",
+			url:  "https://github.com/openshift/cno/pull/42/checks",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "PR URL with query params",
+			url:  "https://github.com/openshift/cno/pull/42?diff=unified",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "PR URL with fragment",
+			url:  "https://github.com/openshift/cno/pull/42#discussion_r123",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "HTTP (not HTTPS)",
+			url:  "http://github.com/openshift/cno/pull/42",
+			want: &GitHubPR{Org: "openshift", Repo: "cno", Number: 42},
+		},
+		{
+			name: "not a PR URL - issue",
+			url:  "https://github.com/openshift/cno/issues/42",
+			want: nil,
+		},
+		{
+			name: "not a PR URL - repo root",
+			url:  "https://github.com/openshift/cno",
+			want: nil,
+		},
+		{
+			name: "not a PR URL - prow URL",
+			url:  "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job/123",
+			want: nil,
+		},
+		{
+			name: "not a PR URL - empty",
+			url:  "",
+			want: nil,
+		},
+		{
+			name: "not a PR URL - non-numeric PR number",
+			url:  "https://github.com/openshift/cno/pull/abc",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseGitHubPRURL(tt.url)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("ParseGitHubPRURL(%q) = %+v, want nil", tt.url, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("ParseGitHubPRURL(%q) = nil, want %+v", tt.url, tt.want)
+			}
+			if got.Org != tt.want.Org || got.Repo != tt.want.Repo || got.Number != tt.want.Number {
+				t.Errorf("ParseGitHubPRURL(%q) = %+v, want %+v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFindProwJobLinks(t *testing.T) {
 	tests := []struct {
 		name       string
