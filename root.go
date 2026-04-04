@@ -190,13 +190,24 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			if flagWatch {
 				jobs, fetchErr := prowapi.FetchJobs(prowURL)
 				if fetchErr == nil && len(jobs) > 0 {
-					cfg, cfgErr := config.Load(&config.Config{NtfyChannel: flagNtfyChannel})
+					cfg, cfgErr := config.Load(&config.Config{
+						Dest:        flagDest,
+						AnalyzeCmd:  flagAnalyzeCmd,
+						NtfyChannel: flagNtfyChannel,
+					})
 					if cfgErr != nil {
 						fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
 						os.Exit(ExitConfigError)
 						return nil
 					}
-					return runMonitorFlow(prowURL, jobs, flagInterval, cfg.NtfyChannel)
+					completed, monErr := runMonitorFlow(prowURL, jobs, flagInterval, cfg.NtfyChannel)
+					if monErr != nil {
+						return monErr
+					}
+					if flagDownload && len(completed) > 0 {
+						downloadMonitoredEntries(completed, cfg, sendNotification)
+					}
+					return nil
 				}
 			}
 
@@ -355,6 +366,56 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 
 	return nil
+}
+
+// downloadMonitoredEntries downloads artifacts for each completed job from
+// the monitor flow, and optionally runs analysis on each.
+func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendNotification bool) {
+	for _, e := range entries {
+		if e.status == nil || !e.status.Finished {
+			continue
+		}
+
+		jobDisplay := e.metadata.JobName
+		if e.prRef != "" {
+			jobDisplay = e.prRef + " " + e.metadata.JobName
+		}
+
+		destPath, skip, err := downloader.ResolveDestination(cfg.Dest, e.metadata, os.Stdin, os.Stdout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to resolve destination for %s: %v\n", jobDisplay, err)
+			continue
+		}
+
+		if skip {
+			fmt.Printf("Skipping download for %s, using existing artifacts\n", jobDisplay)
+		} else {
+			output.PrintField(os.Stdout, "Downloading", jobDisplay)
+			output.PrintField(os.Stdout, "Downloading to", destPath)
+
+			gcsPath := "gs://" + e.metadata.Bucket + "/" + e.metadata.Path
+			if err := downloader.Download(gcsPath, destPath, os.Stdout, os.Stderr); err != nil {
+				fmt.Fprintf(os.Stderr, "Download failed for %s: %v\n", jobDisplay, err)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
+				continue
+			}
+
+			fmt.Printf("Download complete: %s\n", jobDisplay)
+		}
+
+		if cfg.AnalyzeCmd != "" {
+			output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
+			if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Analysis failed for %s: %v\n", jobDisplay, err)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
+				continue
+			}
+			fmt.Printf("Analysis complete: %s\n", jobDisplay)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatAnalysisSuccessMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
+		} else {
+			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadOnlyMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
+		}
+	}
 }
 
 // prowHost is the default Prow instance used when resolving GitHub PR URLs.

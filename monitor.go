@@ -95,10 +95,11 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 // runMonitorFlow presents an interactive job selector and monitors the selected
 // jobs until they all complete. It is called from executeWorkflow when --watch
 // is used with a Prow status page URL.
-func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) error {
+// Returns the monitored entries after completion (nil if no jobs were selected).
+func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) ([]*monitorEntry, error) {
 	entries, items, err := buildEntriesAndItems(jobs)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	refreshFn := func() ([]selector.Item, error) {
@@ -119,11 +120,11 @@ func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, 
 
 	selectedIndices, err := selector.Run(items, refreshFn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(selectedIndices) == 0 {
 		fmt.Println("No jobs selected. Exiting.")
-		return nil
+		return nil, nil
 	}
 
 	// Restore original order (selector returns indices in map-iteration order).
@@ -135,7 +136,10 @@ func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, 
 	}
 
 	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), interval)
-	return monitorJobs(selected, interval, ntfyChannel)
+	if err := monitorJobs(selected, interval, ntfyChannel); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
