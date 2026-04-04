@@ -69,7 +69,7 @@ Examples:
   prow-helper --watch https://github.com/openshift/cno/pull/42
 
   # Monitor multiple jobs from a status page (interactive selector)
-  prow-helper --watch "https://prow.ci.openshift.org/?author=clobrano"
+  prow-helper --watch "https://prow.ci.openshift.org/?author=your-username"
 
   # Download artifacts
   prow-helper --download --dest ~/artifacts <url>
