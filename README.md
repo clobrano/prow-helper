@@ -15,7 +15,7 @@ It accepts PROW URLs, GitHub PR URLs, or any web page containing PROW links, so 
 ## Features
 
 ### Monitoring & Notifications
-- **Watch Mode**: Poll a single running job until completion, with a live countdown display, then automatically download artifacts
+- **Watch Mode**: Poll a single running job until completion with a live countdown display; proceeds to download and analyze artifacts when `--analyze-cmd` is set
 - **Monitor Command**: Fetch all jobs from a Prow status page, interactively select which to watch, and track their progress in a live status table
 - **Desktop Notifications**: Get notified when jobs complete (Linux, macOS, Windows)
 - **ntfy.sh Push Notifications**: Receive mobile alerts via [ntfy.sh](https://ntfy.sh)
@@ -78,7 +78,7 @@ When multiple PROW jobs are found (e.g., from a GitHub PR), prow-helper presents
 ### Common Options
 
 ```bash
-# Watch a running job until completion, then download artifacts
+# Watch a running job until completion, then notify
 prow-helper --watch <url>
 
 # Watch and get mobile notifications when done
@@ -167,14 +167,14 @@ export NTFY_CHANNEL=my-prow-notifications
 Monitor a running job and get notified when it completes:
 
 ```bash
-# Watch until job completes, then download artifacts
+# Watch until job completes, then notify with pass/fail status
 prow-helper --watch <url>
 
-# Watch, download artifacts, and run analysis when complete
+# Watch, then download artifacts and run analysis when complete
 prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
 ```
 
-The watch mode polls the job's `finished.json` every 15 minutes until the job completes, showing a live countdown with elapsed time.
+The watch mode polls the job's `finished.json` every 15 minutes until the job completes, showing a live countdown with elapsed time. On its own, `--watch` reports the result and exits. Combined with `--analyze-cmd`, it continues to download artifacts and run the analysis command.
 
 ### Monitor Command
 
