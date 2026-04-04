@@ -16,6 +16,8 @@ Analyzing PROW test results typically requires multiple manual steps:
 
 ## Features
 
+- **Multiple Input Types**: Accepts direct PROW URLs, GitHub PR URLs, or any web page containing PROW links
+- **Smart Job Discovery**: Automatically fetches associated PROW jobs from GitHub PRs via the Prow API, with interactive selection when multiple jobs are found
 - **Automated URL Handling**: Validates and parses PROW URLs, extracts GCS bucket and path, constructs gsutil commands automatically
 - **Parallel Downloads**: Uses `gsutil -m cp -r` for fast parallel downloads from Google Cloud Storage
 - **Organized Storage**: Artifacts stored in structured folders: `<dest>/<job-name>/<build-id>/`
@@ -55,10 +57,24 @@ go install
 
 ## Usage
 
+prow-helper accepts three types of input URLs:
+
 ```bash
-# Basic usage - download artifacts
+# Direct PROW URL - download artifacts directly
 prow-helper "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
 
+# GitHub PR URL - fetches associated PROW jobs, lets you pick which one
+prow-helper "https://github.com/openshift/cluster-network-operator/pull/42"
+
+# Any web page - scans for embedded PROW links and lets you select
+prow-helper "https://example.com/page-with-prow-links"
+```
+
+When multiple PROW jobs are found (e.g., from a GitHub PR), prow-helper presents a numbered list so you can choose which job's artifacts to download.
+
+### Common Options
+
+```bash
 # Download to specific destination
 prow-helper --dest ~/prow-artifacts <url>
 
@@ -140,6 +156,17 @@ export NTFY_CHANNEL=my-prow-notifications
 
 ## Examples
 
+### GitHub PR Workflow
+
+```bash
+# Pass a GitHub PR URL - prow-helper queries the Prow API for associated jobs
+prow-helper "https://github.com/openshift/cluster-network-operator/pull/42"
+# Lists all CI jobs for the PR, select one, and download its artifacts
+
+# Watch a PR's CI job until it finishes, then analyze
+prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
+```
+
 ### AI-Powered Analysis with Claude
 
 ```bash
@@ -189,6 +216,7 @@ then opens an interactive selector:
 | ↑ / ↓ | Move cursor |
 | `Space` | Toggle job under cursor |
 | `Ctrl+A` | Select / deselect all visible jobs |
+| `Ctrl+R` | Refresh job list from API (preserves selections) |
 | `Enter` | Confirm selection and start monitoring |
 | `Esc` | Clear search (first press) or cancel (second press) |
 
