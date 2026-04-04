@@ -15,18 +15,19 @@ It accepts PROW URLs, GitHub PR URLs, or any web page containing PROW links, so 
 ## Features
 
 ### Monitoring & Notifications
-- **Watch Mode**: Poll a single running job until completion with a live countdown display; proceeds to download and analyze artifacts when `--analyze-cmd` is set
-- **Monitor Command**: Fetch all jobs from a Prow status page, interactively select which to watch, and track their progress in a live status table
+- **Watch Mode** (`--watch`): Poll a single running job until completion with a live countdown display
+- **Multi-Job Monitoring**: Pass a Prow status page URL to `--watch` and interactively select which jobs to monitor in a live status table
 - **Desktop Notifications**: Get notified when jobs complete (Linux, macOS, Windows)
 - **ntfy.sh Push Notifications**: Receive mobile alerts via [ntfy.sh](https://ntfy.sh)
 
 ### Download & Analysis
+- **Download** (`--download`): Download test artifacts from Google Cloud Storage
+- **Analysis** (`--analyze-cmd`): Run any command (Claude, Gemini, custom scripts) on downloaded artifacts; requires `--download`
 - **Multiple Input Types**: Accepts direct PROW URLs, GitHub PR URLs, or any web page containing PROW links
 - **Smart Job Discovery**: Automatically fetches associated PROW jobs from GitHub PRs via the Prow API, with interactive selection when multiple jobs are found
-- **Parallel Downloads**: Uses `gsutil -m cp -r` for fast parallel downloads from Google Cloud Storage
+- **Parallel Downloads**: Uses `gsutil -m cp -r` for fast parallel downloads
 - **Organized Storage**: Artifacts stored in structured folders: `<dest>/<job-name>/<build-id>/`
 - **Conflict Resolution**: Prompts to overwrite, skip, or create timestamped folder when destination exists
-- **AI Analysis Integration**: Run Claude, Gemini, or other AI tools on downloaded artifacts
 - **Background Processing**: Fork to background and receive desktop notification on completion
 
 ### Configuration
@@ -60,60 +61,56 @@ go install
 
 ## Usage
 
-prow-helper accepts three types of input URLs:
+prow-helper requires at least one action flag. Running it without flags prints the help message.
 
-```bash
-# Direct PROW URL - download artifacts directly
-prow-helper "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
+It accepts three types of input URLs: direct PROW URLs, GitHub PR URLs, and Prow status page URLs (or any web page containing PROW links). When multiple jobs are found (e.g., from a GitHub PR), prow-helper presents a numbered list so you can choose which one to work with.
 
-# GitHub PR URL - fetches associated PROW jobs, lets you pick which one
-prow-helper "https://github.com/openshift/cluster-network-operator/pull/42"
-
-# Any web page - scans for embedded PROW links and lets you select
-prow-helper "https://example.com/page-with-prow-links"
-```
-
-When multiple PROW jobs are found (e.g., from a GitHub PR), prow-helper presents a numbered list so you can choose which job's artifacts to download.
-
-### Common Options
-
-```bash
-# Watch a running job until completion, then notify (accepts any input type)
-prow-helper --watch "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
-prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
-
-# Watch and get mobile notifications when done
-prow-helper --watch --ntfy-channel my-channel <url>
-
-# Watch, download, and analyze when complete
-prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
-
-# Monitor multiple jobs from a Prow status page
-prow-helper monitor "https://prow.ci.openshift.org/?author=<your-username>"
-
-# Download artifacts to a specific destination
-prow-helper --dest ~/prow-artifacts <url>
-
-# Download and analyze with Claude (interactive session)
-prow-helper --analyze-cmd "claude 'analyze the Prow test artifacts contained in this folder'" <url>
-
-# Run in background with notification
-prow-helper --background <url>
-
-# Combine options
-prow-helper --dest ~/artifacts --analyze-cmd "claude 'analyze these test failures'" --background <url>
-```
-
-### CLI Flags
+### Action Flags
 
 | Flag | Description |
 |------|-------------|
+| `--watch` | Watch running jobs until completion and notify |
+| `--download` | Download test artifacts |
+| `--analyze-cmd` | Run a command on downloaded artifacts (requires `--download`) |
+
+These can be combined: `--watch --download` watches until the job completes, then downloads. Add `--analyze-cmd` to also run analysis after download.
+
+### Quick Examples
+
+```bash
+# Watch a single PROW job until it completes
+prow-helper --watch "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
+
+# Watch a job from a GitHub PR (select which job interactively)
+prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
+
+# Monitor multiple jobs from a Prow status page (interactive selector)
+prow-helper --watch "https://prow.ci.openshift.org/?author=clobrano"
+
+# Download artifacts
+prow-helper --download --dest ~/prow-artifacts <url>
+
+# Download and analyze with Claude
+prow-helper --download --analyze-cmd "claude 'analyze these test failures'" <url>
+
+# Watch, then download and analyze when complete
+prow-helper --watch --download --analyze-cmd "claude 'analyze'" <url>
+
+# Run in background with notification
+prow-helper --watch --background <url>
+```
+
+### All Flags
+
+| Flag | Description |
+|------|-------------|
+| `--watch` | Watch running jobs until completion |
+| `--download` | Download test artifacts |
+| `--analyze-cmd` | Command to run on downloaded artifacts (requires `--download`) |
+| `--interval` | Polling interval for `--watch` status checks (default: 15m) |
 | `--dest` | Download destination directory (supports `~/` expansion) |
-| `--analyze-cmd` | Command to run after download (receives artifact path as argument) |
-| `--background` | Run in background and notify on completion |
-| `--watch` | Poll job status until completion before downloading |
 | `--ntfy-channel` | ntfy.sh channel for push notifications |
-| `monitor --interval` | Polling interval for `monitor` status checks (default: 15m) |
+| `--background` | Run in background and notify on completion |
 | `--help` | Display help information |
 | `--version` | Display version information |
 
@@ -163,7 +160,7 @@ export NTFY_CHANNEL=my-prow-notifications
 
 ## Examples
 
-### Watch Mode
+### Watch a Single Job
 
 Monitor a running job and get notified when it completes. Works with any input type — PROW URLs, GitHub PR URLs, or web pages:
 
@@ -173,22 +170,22 @@ prow-helper --watch "https://prow.ci.openshift.org/view/gs/test-platform-results
 
 # Watch a job from a GitHub PR (select which job interactively)
 prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
-
-# Watch, then download artifacts and run analysis when complete
-prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
 ```
 
-The watch mode polls the job's `finished.json` every 15 minutes until the job completes, showing a live countdown with elapsed time. On its own, `--watch` reports the result and exits. Combined with `--analyze-cmd`, it continues to download artifacts and run the analysis command.
+The watch mode polls the job's `finished.json` every 15 minutes until the job completes, showing a live countdown with elapsed time. Use `--interval` to change the polling frequency.
 
-### Monitor Command
+### Monitor Multiple Jobs
 
-Watch multiple jobs from a Prow status page in one shot:
+Pass a Prow status page URL to `--watch` to monitor multiple jobs at once:
 
 ```bash
-prow-helper monitor "https://prow.ci.openshift.org/?author=<your-username>"
+prow-helper --watch "https://prow.ci.openshift.org/?author=<your-username>"
+
+# Custom polling interval (default: 15 minutes)
+prow-helper --watch --interval 5m "https://prow.ci.openshift.org/?author=clobrano"
 ```
 
-The command fetches all jobs from the status page via the `/prowjobs.js` API,
+prow-helper fetches all jobs from the status page via the `/prowjobs.js` API,
 then opens an interactive selector:
 
 | Key | Action |
@@ -201,12 +198,44 @@ then opens an interactive selector:
 | `Enter` | Confirm selection and start monitoring |
 | `Esc` | Clear search (first press) or cancel (second press) |
 
-After confirming, prow-helper polls the selected jobs at a configurable
+After confirming, prow-helper polls the selected jobs at the configured
 interval and prints a live status table until all jobs complete.
 
+### Download Artifacts
+
 ```bash
-# Custom polling interval (default: 15 minutes)
-prow-helper monitor --interval 5m "https://prow.ci.openshift.org/?author=clobrano"
+# Download artifacts from a completed job
+prow-helper --download "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/my-job/54321"
+
+# Download to a specific directory
+prow-helper --download --dest ~/prow-artifacts <url>
+
+# Download from a GitHub PR (select which job interactively)
+prow-helper --download "https://github.com/openshift/cluster-network-operator/pull/42"
+```
+
+### Download and Analyze
+
+`--analyze-cmd` runs any command on the downloaded artifacts. It requires `--download`.
+
+```bash
+# Download and analyze with Claude
+prow-helper --download --analyze-cmd "claude 'analyze the Prow test artifacts contained in this folder'" <url>
+
+# Or configure the analysis command once in ~/.config/prow-helper/config.yaml:
+#   dest: ~/prow-artifacts
+#   analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
+prow-helper --download <url>
+```
+
+### Combining Watch + Download
+
+```bash
+# Watch a job, then download artifacts when it completes
+prow-helper --watch --download <url>
+
+# Watch, download, and analyze
+prow-helper --watch --download --analyze-cmd "claude 'analyze these failures'" <url>
 ```
 
 ### ntfy.sh Push Notifications
@@ -225,32 +254,10 @@ prow-helper --watch --ntfy-channel my-prow-notifications <url>
 echo "ntfy_channel: my-prow-notifications" >> ~/.config/prow-helper/config.yaml
 ```
 
-### GitHub PR Workflow
-
-```bash
-# Pass a GitHub PR URL - prow-helper queries the Prow API for associated jobs
-prow-helper "https://github.com/openshift/cluster-network-operator/pull/42"
-# Lists all CI jobs for the PR, select one, and download its artifacts
-
-# Watch a PR's CI job until it finishes, then analyze
-prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
-```
-
-### AI-Powered Analysis with Claude
-
-```bash
-# Configure once in ~/.config/prow-helper/config.yaml
-# dest: ~/prow-artifacts
-# analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
-
-prow-helper "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/my-job/54321"
-# Downloads to ~/prow-artifacts/my-job/54321/ and starts Claude analysis
-```
-
 ### Background Processing
 
 ```bash
-prow-helper --background <url>
+prow-helper --download --background <url>
 # Returns immediately, notification appears when download completes
 ```
 

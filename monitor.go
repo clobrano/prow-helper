@@ -9,9 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/cobra"
-
-	"github.com/clobrano/prow-helper/internal/config"
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
@@ -19,40 +16,6 @@ import (
 	"github.com/clobrano/prow-helper/internal/selector"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
-
-var flagMonitorInterval time.Duration
-var flagMonitorNtfyChannel string
-
-var monitorCmd = &cobra.Command{
-	Use:   "monitor <prow-status-url>",
-	Short: "Fetch and monitor prow jobs from a status page",
-	Long: `monitor fetches all prow job links from a Prow status page (e.g. filtered by
-author) and lets you choose which jobs to watch.
-
-The Prow status page is a React SPA — job data is loaded at runtime from the
-/prowjobs.js API. The monitor command calls that API directly and filters by
-any query parameters present in the URL (author, job, state).
-
-An interactive list lets you select which jobs to monitor:
-  Type       – filter the list (substring match against job name / state)
-  ↑ / ↓     – move the cursor
-  SPACE      – toggle the job under the cursor
-  Ctrl+A     – select / deselect all visible jobs
-  ENTER      – confirm the selection and start monitoring
-  ESC        – clear the search (first press) or cancel (second press)
-
-Example:
-  prow-helper monitor https://prow.ci.openshift.org/?author=clobrano`,
-	Args: cobra.ExactArgs(1),
-	RunE: runMonitor,
-}
-
-func init() {
-	monitorCmd.Flags().DurationVar(&flagMonitorInterval, "interval", watcher.DefaultPollInterval,
-		"Polling interval for job status checks")
-	monitorCmd.Flags().StringVar(&flagMonitorNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for push notifications")
-	rootCmd.AddCommand(monitorCmd)
-}
 
 // monitorEntry holds the parsed metadata for a prow job and its latest known status.
 type monitorEntry struct {
@@ -129,30 +92,10 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 	return entries, items, nil
 }
 
-func runMonitor(cmd *cobra.Command, args []string) error {
-	pageURL := args[0]
-
-	// Load configuration so ntfy channel can come from env var / config file
-	// when not explicitly set via the --ntfy-channel flag.
-	cfg, err := config.Load(&config.Config{NtfyChannel: flagMonitorNtfyChannel})
-	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-	ntfyChannel := cfg.NtfyChannel
-
-	fmt.Fprintf(os.Stdout, "Fetching prow jobs from %s...\n", pageURL)
-	if ntfyChannel != "" {
-		fmt.Fprintf(os.Stdout, "Ntfy channel: %s\n", ntfyChannel)
-	}
-
-	jobs, err := prowapi.FetchJobs(pageURL)
-	if err != nil {
-		return fmt.Errorf("failed to fetch prow jobs: %w", err)
-	}
-	if len(jobs) == 0 {
-		return fmt.Errorf("no prow jobs found (try adjusting the filter parameters in the URL)")
-	}
-
+// runMonitorFlow presents an interactive job selector and monitors the selected
+// jobs until they all complete. It is called from executeWorkflow when --watch
+// is used with a Prow status page URL.
+func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) error {
 	entries, items, err := buildEntriesAndItems(jobs)
 	if err != nil {
 		return err
@@ -191,8 +134,8 @@ func runMonitor(cmd *cobra.Command, args []string) error {
 		selected[i] = entries[idx]
 	}
 
-	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), flagMonitorInterval)
-	return monitorJobs(selected, flagMonitorInterval, ntfyChannel)
+	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), interval)
+	return monitorJobs(selected, interval, ntfyChannel)
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
