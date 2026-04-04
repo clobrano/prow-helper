@@ -114,11 +114,14 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 
 // Load loads the full configuration by merging all sources.
 // cliConfig should contain values from command-line flags (can be nil).
-func Load(cliConfig *Config) (*Config, error) {
+// configPath overrides the default config file location when non-empty.
+func Load(cliConfig *Config, configPath string) (*Config, error) {
 	defaults := DefaultConfig()
 	envConfig := LoadEnvConfig()
 
-	configPath := GetConfigPath()
+	if configPath == "" {
+		configPath = GetConfigPath()
+	}
 	fileConfig, err := LoadConfigFile(configPath)
 	if err != nil {
 		return nil, err

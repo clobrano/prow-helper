@@ -44,6 +44,7 @@ var (
 	flagDownload       bool
 	flagNtfyChannel    string
 	flagInterval       time.Duration
+	flagConfig         string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -85,6 +86,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagDownload, "download", false, "Download test artifacts")
 	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run on downloaded artifacts (requires --download)")
 	rootCmd.Flags().DurationVar(&flagInterval, "interval", watcher.DefaultPollInterval, "Polling interval for --watch status checks")
+	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
 	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
 	rootCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background and notify when done")
@@ -194,7 +196,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 						Dest:        flagDest,
 						AnalyzeCmd:  flagAnalyzeCmd,
 						NtfyChannel: flagNtfyChannel,
-					})
+					}, flagConfig)
 					if cfgErr != nil {
 						fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
 						os.Exit(ExitConfigError)
@@ -252,7 +254,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		NtfyChannel: flagNtfyChannel,
 	}
 
-	cfg, err := config.Load(cliConfig)
+	cfg, err := config.Load(cliConfig, flagConfig)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to load configuration: %v", err)
 		fmt.Fprintln(os.Stderr, errMsg)

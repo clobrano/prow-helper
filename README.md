@@ -108,6 +108,7 @@ prow-helper --watch --background <url>
 | `--download` | Download test artifacts |
 | `--analyze-cmd` | Command to run on downloaded artifacts (requires `--download`) |
 | `--interval` | Polling interval for `--watch` status checks (default: 15m) |
+| `--config` | Path to config file (default: `~/.config/prow-helper/config.yaml`) |
 | `--dest` | Download destination directory (supports `~/` expansion) |
 | `--ntfy-channel` | ntfy.sh channel for push notifications |
 | `--background` | Run in background and notify on completion |
@@ -120,7 +121,13 @@ The config file provides default values for `--dest`, `--analyze-cmd`, and `--nt
 
 ### Configuration File
 
-Location: `~/.config/prow-helper/config.yaml` (follows XDG Base Directory Specification)
+Default location: `~/.config/prow-helper/config.yaml` (follows XDG Base Directory Specification)
+
+Use `--config` to point to a different file:
+
+```bash
+prow-helper --config ~/my-config.yaml --download <url>
+```
 
 ```yaml
 # Download destination
