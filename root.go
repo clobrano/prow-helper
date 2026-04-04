@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -40,45 +41,57 @@ var (
 	flagBackground     bool
 	flagNotifyComplete bool // Internal flag set by background mode
 	flagWatch          bool
+	flagDownload       bool
 	flagNtfyChannel    string
+	flagInterval       time.Duration
+	flagConfig         string
 )
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "prow-helper <prow-url|github-pr-url>",
-	Short: "Download and analyze PROW CI test artifacts",
-	Long: `prow-helper automates the workflow of downloading PROW CI test artifacts
-and running analysis on them.
+	Use:   "prow-helper [flags] <url>",
+	Short: "Monitor PROW CI jobs, download test artifacts, and run analysis",
+	Long: `prow-helper monitors PROW CI jobs, downloads test artifacts, and runs
+analysis on them.
 
-It takes a PROW test URL (e.g., https://prow.ci.openshift.org/view/gs/...),
-a GitHub pull request URL (e.g., https://github.com/org/repo/pull/123),
+It accepts a PROW test URL, a GitHub pull request URL, a Prow status page URL,
 or any page containing prow job links.
 
-When given a GitHub PR URL, it queries the Prow API for jobs associated
-with that PR and lets you select which one to work with.
+At least one action flag is required:
+  --watch        Watch running jobs until completion
+  --download     Download test artifacts
+  --analyze-cmd  Run a command on downloaded artifacts (requires --download)
 
-Example:
-  prow-helper https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345
+Examples:
+  # Watch a single job
+  prow-helper --watch https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345
 
-  prow-helper https://github.com/openshift/cno/pull/42
-
-  prow-helper --dest ~/artifacts --analyze-cmd "my-analyzer" <url>
-
+  # Watch jobs from a GitHub PR
   prow-helper --watch https://github.com/openshift/cno/pull/42
 
-  prow-helper --watch --ntfy-channel my-channel <url>`,
-	Args: cobra.ExactArgs(1),
+  # Monitor multiple jobs from a status page (interactive selector)
+  prow-helper --watch "https://prow.ci.openshift.org/?author=your-username"
+
+  # Download artifacts
+  prow-helper --download --dest ~/artifacts <url>
+
+  # Watch, then download and analyze
+  prow-helper --watch --download --analyze-cmd "claude 'analyze'" <url>`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: runMain,
 }
 
 func init() {
+	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Watch running jobs until completion")
+	rootCmd.Flags().BoolVar(&flagDownload, "download", false, "Download test artifacts")
+	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run on downloaded artifacts (requires --download)")
+	rootCmd.Flags().DurationVar(&flagInterval, "interval", 0, "Polling interval for --watch status checks (default: 15m)")
+	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
-	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run after download")
+	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
 	rootCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background and notify when done")
 	rootCmd.Flags().BoolVar(&flagNotifyComplete, "notify-on-complete", false, "Internal flag for background mode notifications")
 	rootCmd.Flags().MarkHidden("notify-on-complete") // Hide from help output
-	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Poll job status until completion before downloading")
-	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
 	rootCmd.Version = Version
 }
 
@@ -90,6 +103,22 @@ func Execute() {
 }
 
 func runMain(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return cmd.Help()
+	}
+
+	if !flagWatch && !flagDownload {
+		fmt.Fprintln(os.Stderr, "Error: at least one action flag is required (--watch or --download)")
+		fmt.Fprintln(os.Stderr)
+		return cmd.Help()
+	}
+
+	if flagAnalyzeCmd != "" && !flagDownload {
+		fmt.Fprintln(os.Stderr, "Error: --analyze-cmd requires --download")
+		os.Exit(ExitConfigError)
+		return nil
+	}
+
 	prowURL := args[0]
 
 	// If background mode, fork and exit parent
@@ -135,7 +164,10 @@ func runInBackground(args []string) error {
 	return nil
 }
 
-// executeWorkflow runs the main download and analysis workflow
+// executeWorkflow runs the main workflow based on the action flags:
+//   - --watch: watch running jobs until completion
+//   - --download: download test artifacts
+//   - --analyze-cmd (with --download): run analysis on downloaded artifacts
 func executeWorkflow(prowURL string, sendNotification bool) error {
 
 	// Step 1: Validate URL; if not a direct prow URL, try to resolve it
@@ -155,6 +187,34 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			}
 			prowURL = resolved
 		} else {
+			// Not a PROW job URL and not a GitHub PR.
+			// If --watch is set, try the monitor flow (status page URLs).
+			if flagWatch {
+				jobs, fetchErr := prowapi.FetchJobs(prowURL)
+				if fetchErr == nil && len(jobs) > 0 {
+					cfg, cfgErr := config.Load(&config.Config{
+						Dest:        flagDest,
+						AnalyzeCmd:  flagAnalyzeCmd,
+						NtfyChannel: flagNtfyChannel,
+						Interval:    flagInterval,
+					}, flagConfig)
+					if cfgErr != nil {
+						fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
+						os.Exit(ExitConfigError)
+						return nil
+					}
+					completed, monErr := runMonitorFlow(prowURL, jobs, cfg.Interval, cfg.NtfyChannel)
+					if monErr != nil {
+						return monErr
+					}
+					if flagDownload && len(completed) > 0 {
+						downloadMonitoredEntries(completed, cfg, sendNotification)
+					}
+					return nil
+				}
+			}
+
+			// Fall back to web page scanning
 			fmt.Fprintf(os.Stdout, "Not a direct prow URL (%v), attempting to find prow job link on page...\n", err)
 			resolved, resolveErr := resolveProwURL(prowURL)
 			if resolveErr != nil {
@@ -193,9 +253,10 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		Dest:        flagDest,
 		AnalyzeCmd:  flagAnalyzeCmd,
 		NtfyChannel: flagNtfyChannel,
+		Interval:    flagInterval,
 	}
 
-	cfg, err := config.Load(cliConfig)
+	cfg, err := config.Load(cliConfig, flagConfig)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to load configuration: %v", err)
 		fmt.Fprintln(os.Stderr, errMsg)
@@ -219,7 +280,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 	// Step 4: If watch mode, poll until job completes
 	if flagWatch {
-		status, err := watcher.Watch(metadata, watcher.DefaultPollInterval, os.Stdout)
+		status, err := watcher.Watch(metadata, cfg.Interval, os.Stdout)
 		if err != nil {
 			errMsg := fmt.Sprintf("Watch failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)
@@ -228,30 +289,22 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			return nil
 		}
 
-		if !status.Passed {
-			// Job failed
-			msg := output.FormatJobStatusMessage(jobDisplay, false)
-			fmt.Println(msg)
+		msg := output.FormatJobStatusMessage(jobDisplay, status.Passed)
+		fmt.Println(msg)
 
-			// If no analyze command, just notify and exit
-			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, false), false, cfg.NtfyChannel, true)
+		if !flagDownload {
+			// Watch-only mode: notify and exit
+			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, status.Passed), status.Passed, cfg.NtfyChannel, true)
+			if !status.Passed {
 				os.Exit(ExitJobFailed)
-				return nil
 			}
-			// If analyze command is set, continue to download artifacts for analysis
-		} else {
-			// Job passed
-			msg := output.FormatJobStatusMessage(jobDisplay, true)
-			fmt.Println(msg)
-
-			// If no analyze command, just notify and exit
-			if cfg.AnalyzeCmd == "" {
-				sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, true), true, cfg.NtfyChannel, true)
-				return nil
-			}
-			// If analyze command is set, continue to download artifacts for analysis
+			return nil
 		}
+		// --download is set: fall through to download artifacts
+	}
+
+	if !flagDownload {
+		return nil
 	}
 
 	// Step 5: Resolve destination with conflict handling
@@ -317,6 +370,56 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 
 	return nil
+}
+
+// downloadMonitoredEntries downloads artifacts for each completed job from
+// the monitor flow, and optionally runs analysis on each.
+func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendNotification bool) {
+	for _, e := range entries {
+		if e.status == nil || !e.status.Finished {
+			continue
+		}
+
+		jobDisplay := e.metadata.JobName
+		if e.prRef != "" {
+			jobDisplay = e.prRef + " " + e.metadata.JobName
+		}
+
+		destPath, skip, err := downloader.ResolveDestination(cfg.Dest, e.metadata, os.Stdin, os.Stdout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to resolve destination for %s: %v\n", jobDisplay, err)
+			continue
+		}
+
+		if skip {
+			fmt.Printf("Skipping download for %s, using existing artifacts\n", jobDisplay)
+		} else {
+			output.PrintField(os.Stdout, "Downloading", jobDisplay)
+			output.PrintField(os.Stdout, "Downloading to", destPath)
+
+			gcsPath := "gs://" + e.metadata.Bucket + "/" + e.metadata.Path
+			if err := downloader.Download(gcsPath, destPath, os.Stdout, os.Stderr); err != nil {
+				fmt.Fprintf(os.Stderr, "Download failed for %s: %v\n", jobDisplay, err)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
+				continue
+			}
+
+			fmt.Printf("Download complete: %s\n", jobDisplay)
+		}
+
+		if cfg.AnalyzeCmd != "" {
+			output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
+			if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Analysis failed for %s: %v\n", jobDisplay, err)
+				sendNotificationWithConfig(jobDisplay, notifier.FormatFailureMessage(jobDisplay, err), false, cfg.NtfyChannel, sendNotification)
+				continue
+			}
+			fmt.Printf("Analysis complete: %s\n", jobDisplay)
+			sendNotificationWithConfig(jobDisplay, notifier.FormatAnalysisSuccessMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
+		} else {
+			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadOnlyMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
+		}
+	}
 }
 
 // prowHost is the default Prow instance used when resolving GitHub PR URLs.
