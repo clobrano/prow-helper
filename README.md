@@ -116,6 +116,8 @@ prow-helper --watch --background <url>
 
 ## Configuration
 
+The config file provides default values for `--dest`, `--analyze-cmd`, and `--ntfy-channel` so you don't have to pass them on every invocation. You still need to specify an action flag (`--watch` or `--download`) on the command line.
+
 ### Configuration File
 
 Location: `~/.config/prow-helper/config.yaml` (follows XDG Base Directory Specification)
@@ -129,6 +131,18 @@ analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
 
 # ntfy.sh channel for push notifications (optional)
 ntfy_channel: my-prow-notifications
+```
+
+With this config, downloading and analyzing is just:
+
+```bash
+prow-helper --download <url>
+```
+
+Or watch a job, then download and analyze when it completes:
+
+```bash
+prow-helper --watch --download <url>
 ```
 
 ### Environment Variables
