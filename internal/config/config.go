@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/adrg/xdg"
 	"gopkg.in/yaml.v3"
@@ -10,9 +11,10 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	Dest        string `yaml:"dest"`         // Download destination directory
-	AnalyzeCmd  string `yaml:"analyze_cmd"`  // Command to run after download
-	NtfyChannel string `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
+	Dest        string        `yaml:"dest"`         // Download destination directory
+	AnalyzeCmd  string        `yaml:"analyze_cmd"`  // Command to run after download
+	NtfyChannel string        `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
+	Interval    time.Duration `yaml:"interval"`     // Polling interval for --watch
 }
 
 // DefaultConfig returns a Config with default values.
@@ -21,6 +23,7 @@ func DefaultConfig() *Config {
 		Dest:        ".",
 		AnalyzeCmd:  "",
 		NtfyChannel: "",
+		Interval:    15 * time.Minute,
 	}
 }
 
@@ -51,11 +54,17 @@ func LoadConfigFile(path string) (*Config, error) {
 
 // LoadEnvConfig loads configuration from environment variables.
 func LoadEnvConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		Dest:        os.Getenv("PROW_HELPER_DEST"),
 		AnalyzeCmd:  os.Getenv("PROW_HELPER_ANALYZE_CMD"),
 		NtfyChannel: os.Getenv("NTFY_CHANNEL"),
 	}
+	if v := os.Getenv("PROW_HELPER_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Interval = d
+		}
+	}
+	return cfg
 }
 
 // MergeConfig merges configurations with priority: cli > env > file > defaults.
@@ -68,6 +77,7 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		result.Dest = defaults.Dest
 		result.AnalyzeCmd = defaults.AnalyzeCmd
 		result.NtfyChannel = defaults.NtfyChannel
+		result.Interval = defaults.Interval
 	}
 
 	// Override with file config
@@ -80,6 +90,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if file.NtfyChannel != "" {
 			result.NtfyChannel = file.NtfyChannel
+		}
+		if file.Interval != 0 {
+			result.Interval = file.Interval
 		}
 	}
 
@@ -94,6 +107,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if env.NtfyChannel != "" {
 			result.NtfyChannel = env.NtfyChannel
 		}
+		if env.Interval != 0 {
+			result.Interval = env.Interval
+		}
 	}
 
 	// Override with CLI config
@@ -106,6 +122,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if cli.NtfyChannel != "" {
 			result.NtfyChannel = cli.NtfyChannel
+		}
+		if cli.Interval != 0 {
+			result.Interval = cli.Interval
 		}
 	}
 

@@ -85,7 +85,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Watch running jobs until completion")
 	rootCmd.Flags().BoolVar(&flagDownload, "download", false, "Download test artifacts")
 	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run on downloaded artifacts (requires --download)")
-	rootCmd.Flags().DurationVar(&flagInterval, "interval", watcher.DefaultPollInterval, "Polling interval for --watch status checks")
+	rootCmd.Flags().DurationVar(&flagInterval, "interval", 0, "Polling interval for --watch status checks (default: 15m)")
 	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
 	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
@@ -196,13 +196,14 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 						Dest:        flagDest,
 						AnalyzeCmd:  flagAnalyzeCmd,
 						NtfyChannel: flagNtfyChannel,
+						Interval:    flagInterval,
 					}, flagConfig)
 					if cfgErr != nil {
 						fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
 						os.Exit(ExitConfigError)
 						return nil
 					}
-					completed, monErr := runMonitorFlow(prowURL, jobs, flagInterval, cfg.NtfyChannel)
+					completed, monErr := runMonitorFlow(prowURL, jobs, cfg.Interval, cfg.NtfyChannel)
 					if monErr != nil {
 						return monErr
 					}
@@ -252,6 +253,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		Dest:        flagDest,
 		AnalyzeCmd:  flagAnalyzeCmd,
 		NtfyChannel: flagNtfyChannel,
+		Interval:    flagInterval,
 	}
 
 	cfg, err := config.Load(cliConfig, flagConfig)
@@ -278,7 +280,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 	// Step 4: If watch mode, poll until job completes
 	if flagWatch {
-		status, err := watcher.Watch(metadata, flagInterval, os.Stdout)
+		status, err := watcher.Watch(metadata, cfg.Interval, os.Stdout)
 		if err != nil {
 			errMsg := fmt.Sprintf("Watch failed: %v", err)
 			fmt.Fprintln(os.Stderr, errMsg)

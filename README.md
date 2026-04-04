@@ -136,6 +136,9 @@ dest: ~/prow-artifacts
 # Command to run after download (artifact path appended as last argument)
 analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
 
+# Polling interval for --watch (default: 15m)
+interval: 5m
+
 # ntfy.sh channel for push notifications (optional)
 ntfy_channel: my-prow-notifications
 ```
@@ -157,6 +160,7 @@ prow-helper --watch --download <url>
 ```bash
 export PROW_HELPER_DEST=~/my-artifacts
 export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
+export PROW_HELPER_INTERVAL=5m
 export NTFY_CHANNEL=my-prow-notifications
 ```
 
