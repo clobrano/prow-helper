@@ -78,8 +78,9 @@ When multiple PROW jobs are found (e.g., from a GitHub PR), prow-helper presents
 ### Common Options
 
 ```bash
-# Watch a running job until completion, then notify
-prow-helper --watch <url>
+# Watch a running job until completion, then notify (accepts any input type)
+prow-helper --watch "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
+prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
 
 # Watch and get mobile notifications when done
 prow-helper --watch --ntfy-channel my-channel <url>
@@ -164,11 +165,14 @@ export NTFY_CHANNEL=my-prow-notifications
 
 ### Watch Mode
 
-Monitor a running job and get notified when it completes:
+Monitor a running job and get notified when it completes. Works with any input type — PROW URLs, GitHub PR URLs, or web pages:
 
 ```bash
-# Watch until job completes, then notify with pass/fail status
-prow-helper --watch <url>
+# Watch a PROW job
+prow-helper --watch "https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345"
+
+# Watch a job from a GitHub PR (select which job interactively)
+prow-helper --watch "https://github.com/openshift/cluster-network-operator/pull/42"
 
 # Watch, then download artifacts and run analysis when complete
 prow-helper --watch --analyze-cmd "claude 'analyze these failures'" <url>
