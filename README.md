@@ -4,13 +4,13 @@ A command-line tool for monitoring PROW CI jobs, downloading test artifacts, and
 
 ## Overview
 
-Working with PROW CI typically means juggling browser tabs, polling job pages for completion, and manually downloading artifacts when things fail. **prow-helper** brings all of that into a single command.
+Working with PROW CI typically means juggling browser tabs, polling job pages for completion, and manually downloading artifacts when things fail. **prow-helper** brings all of that into your terminal.
 
-**Watch and monitor jobs** — Point prow-helper at a running job or a Prow status page and it will poll until completion, showing live progress and sending desktop or mobile notifications when jobs finish.
+Use `--watch` to monitor running jobs — point it at a PROW job URL, a GitHub PR, or a Prow status page and it will poll until completion, showing live progress and sending desktop or mobile notifications when jobs finish.
 
-**Download and analyze artifacts** — Once a job completes (or for jobs already finished), prow-helper downloads artifacts from GCS and optionally hands them off to an AI tool like Claude or Gemini for automated failure analysis.
+Use `--download` to pull artifacts from GCS, and pair it with `--analyze-cmd` to hand them off to an AI tool like Claude or Gemini (or any other command) for automated failure analysis.
 
-It accepts PROW URLs, GitHub PR URLs, or any web page containing PROW links, so you can work from wherever you are.
+These flags compose naturally — `--watch --download --analyze-cmd "..."` watches a job, downloads artifacts when it completes, and runs analysis in one go.
 
 ## Features
 
