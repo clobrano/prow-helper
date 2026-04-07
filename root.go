@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,6 +21,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/parser"
 	"github.com/clobrano/prow-helper/internal/prowapi"
 	"github.com/clobrano/prow-helper/internal/resolver"
+	"github.com/clobrano/prow-helper/internal/selector"
 	"github.com/clobrano/prow-helper/internal/watcher"
 )
 
@@ -175,9 +177,12 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		// Check if it's a GitHub PR URL first
 		if pr := resolver.ParseGitHubPRURL(prowURL); pr != nil {
 			fmt.Fprintf(os.Stdout, "GitHub PR detected: %s/%s #%d — fetching prow jobs...\n", pr.Org, pr.Repo, pr.Number)
-			resolved, resolveErr := resolveGitHubPR(pr)
-			if resolveErr != nil {
+			jobs, resolveErr := prowapi.FetchJobsForPR(prowHost, pr.Org, pr.Repo, pr.Number)
+			if resolveErr != nil || len(jobs) == 0 {
 				errMsg := fmt.Sprintf("Could not find prow jobs for PR: %v", resolveErr)
+				if resolveErr == nil {
+					errMsg = fmt.Sprintf("no prow jobs found for %s/%s#%d", pr.Org, pr.Repo, pr.Number)
+				}
 				fmt.Fprintln(os.Stderr, errMsg)
 				if sendNotification {
 					notifier.Notify("URL Validation", errMsg, false)
@@ -185,7 +190,44 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 				os.Exit(ExitInvalidURL)
 				return nil
 			}
-			prowURL = resolved
+
+			// Multiple jobs with --watch: use the multi-job monitor flow
+			if flagWatch && len(jobs) > 1 {
+				cfg, cfgErr := config.Load(&config.Config{
+					Dest:        flagDest,
+					AnalyzeCmd:  flagAnalyzeCmd,
+					NtfyChannel: flagNtfyChannel,
+					Interval:    flagInterval,
+				}, flagConfig)
+				if cfgErr != nil {
+					fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
+					os.Exit(ExitConfigError)
+					return nil
+				}
+				completed, monErr := runMonitorFlowForPR(pr, jobs, cfg.Interval, cfg.NtfyChannel)
+				if monErr != nil {
+					return monErr
+				}
+				if flagDownload && len(completed) > 0 {
+					downloadMonitoredEntries(completed, cfg, sendNotification)
+				}
+				return nil
+			}
+
+			// Single job: select automatically
+			if len(jobs) == 1 {
+				fmt.Printf("Found prow job: %s (%s)\n", jobs[0].Name, jobs[0].State)
+				prowURL = jobs[0].URL
+			} else {
+				// Multiple jobs without --watch: let user pick one
+				resolved, pickErr := promptJobSelection(jobs, pr)
+				if pickErr != nil {
+					fmt.Fprintf(os.Stderr, "Job selection failed: %v\n", pickErr)
+					os.Exit(ExitInvalidURL)
+					return nil
+				}
+				prowURL = resolved
+			}
 		} else {
 			// Not a PROW job URL and not a GitHub PR.
 			// If --watch is set, try the monitor flow (status page URLs).
@@ -425,23 +467,8 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendN
 // prowHost is the default Prow instance used when resolving GitHub PR URLs.
 const prowHost = "prow.ci.openshift.org"
 
-// resolveGitHubPR queries the Prow API for jobs matching the given GitHub PR
-// and lets the user select one when multiple are found.
-func resolveGitHubPR(pr *resolver.GitHubPR) (string, error) {
-	jobs, err := prowapi.FetchJobsForPR(prowHost, pr.Org, pr.Repo, pr.Number)
-	if err != nil {
-		return "", err
-	}
-	if len(jobs) == 0 {
-		return "", fmt.Errorf("no prow jobs found for %s/%s#%d", pr.Org, pr.Repo, pr.Number)
-	}
-
-	if len(jobs) == 1 {
-		fmt.Printf("Found prow job: %s (%s)\n", jobs[0].Name, jobs[0].State)
-		return jobs[0].URL, nil
-	}
-
-	// Multiple jobs: let the user choose
+// promptJobSelection presents a numbered list of jobs and lets the user pick one.
+func promptJobSelection(jobs []prowapi.Job, pr *resolver.GitHubPR) (string, error) {
 	fmt.Printf("Found %d prow jobs for %s/%s#%d:\n", len(jobs), pr.Org, pr.Repo, pr.Number)
 	for i, j := range jobs {
 		fmt.Printf("  [%d] %-12s %s\n", i+1, j.State, j.Name)
@@ -461,6 +488,53 @@ func resolveGitHubPR(pr *resolver.GitHubPR) (string, error) {
 		}
 		return jobs[n-1].URL, nil
 	}
+}
+
+// runMonitorFlowForPR is like runMonitorFlow but refreshes jobs via FetchJobsForPR
+// instead of FetchJobs, since GitHub PR URLs are not Prow status page URLs.
+func runMonitorFlowForPR(pr *resolver.GitHubPR, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) ([]*monitorEntry, error) {
+	entries, items, err := buildEntriesAndItems(jobs)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshFn := func() ([]selector.Item, error) {
+		refreshed, fetchErr := prowapi.FetchJobsForPR(prowHost, pr.Org, pr.Repo, pr.Number)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to fetch prow jobs: %w", fetchErr)
+		}
+		if len(refreshed) == 0 {
+			return nil, fmt.Errorf("no prow jobs found")
+		}
+		newEntries, newItems, buildErr := buildEntriesAndItems(refreshed)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		entries = newEntries
+		return newItems, nil
+	}
+
+	selectedIndices, err := selector.Run(items, refreshFn)
+	if err != nil {
+		return nil, err
+	}
+	if len(selectedIndices) == 0 {
+		fmt.Println("No jobs selected. Exiting.")
+		return nil, nil
+	}
+
+	sort.Ints(selectedIndices)
+
+	selected := make([]*monitorEntry, len(selectedIndices))
+	for i, idx := range selectedIndices {
+		selected[i] = entries[idx]
+	}
+
+	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), interval)
+	if err := monitorJobs(selected, interval, ntfyChannel); err != nil {
+		return nil, err
+	}
+	return selected, nil
 }
 
 // resolveProwURL fetches the given URL and extracts a prow job link from the page.
