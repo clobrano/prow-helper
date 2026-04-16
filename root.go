@@ -16,6 +16,7 @@ import (
 	"github.com/clobrano/prow-helper/internal/analyzer"
 	"github.com/clobrano/prow-helper/internal/config"
 	"github.com/clobrano/prow-helper/internal/downloader"
+	"github.com/clobrano/prow-helper/internal/gitdetect"
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
@@ -59,12 +60,18 @@ analysis on them.
 It accepts a PROW test URL, a GitHub pull request URL, a Prow status page URL,
 or any page containing prow job links.
 
+When using --watch without a URL inside a git repository that has an open
+pull request, prow-helper will auto-detect the PR and offer to watch it.
+
 At least one action flag is required:
   --watch        Watch running jobs until completion
   --download     Download test artifacts
   --analyze-cmd  Run a command on downloaded artifacts (requires --download)
 
 Examples:
+  # Auto-detect PR from current git directory
+  prow-helper --watch
+
   # Watch a single job
   prow-helper --watch https://prow.ci.openshift.org/view/gs/test-platform-results/logs/job-name/12345
 
@@ -106,7 +113,28 @@ func Execute() {
 
 func runMain(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
-		return cmd.Help()
+		if !flagWatch {
+			return cmd.Help()
+		}
+		// --watch without URL: try to auto-detect PR from git directory
+		detectedURL, err := gitdetect.DetectPRURL()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "No URL provided and could not auto-detect PR: %v\n\n", err)
+			return cmd.Help()
+		}
+
+		fmt.Printf("Detected PR: %s\nWatch it? [Y/n]: ", detectedURL)
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input != "" && input != "y" && input != "yes" {
+			fmt.Println("Aborted.")
+			return nil
+		}
+		args = []string{detectedURL}
 	}
 
 	if !flagWatch && !flagDownload {
