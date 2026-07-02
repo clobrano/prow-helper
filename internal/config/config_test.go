@@ -19,6 +19,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.NtfyChannel != "" {
 		t.Errorf("DefaultConfig().NtfyChannel = %v, want empty string", cfg.NtfyChannel)
 	}
+	if cfg.OnlyOnFailure != false {
+		t.Errorf("DefaultConfig().OnlyOnFailure = %v, want false", cfg.OnlyOnFailure)
+	}
 }
 
 func TestGetConfigPath(t *testing.T) {
@@ -45,6 +48,7 @@ func TestLoadConfigFile(t *testing.T) {
 
 	configContent := `dest: /tmp/prow-artifacts
 analyze_cmd: "echo test"
+only_on_failure: true
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write test config: %v", err)
@@ -60,6 +64,9 @@ analyze_cmd: "echo test"
 	}
 	if cfg.AnalyzeCmd != "echo test" {
 		t.Errorf("LoadConfigFile().AnalyzeCmd = %v, want %v", cfg.AnalyzeCmd, "echo test")
+	}
+	if cfg.OnlyOnFailure != true {
+		t.Errorf("LoadConfigFile().OnlyOnFailure = %v, want true", cfg.OnlyOnFailure)
 	}
 }
 
@@ -93,16 +100,19 @@ func TestLoadEnvConfig(t *testing.T) {
 	origDest := os.Getenv("PROW_HELPER_DEST")
 	origCmd := os.Getenv("PROW_HELPER_ANALYZE_CMD")
 	origNtfy := os.Getenv("NTFY_CHANNEL")
+	origOnFailure := os.Getenv("PROW_HELPER_ONLY_ON_FAILURE")
 	defer func() {
 		os.Setenv("PROW_HELPER_DEST", origDest)
 		os.Setenv("PROW_HELPER_ANALYZE_CMD", origCmd)
 		os.Setenv("NTFY_CHANNEL", origNtfy)
+		os.Setenv("PROW_HELPER_ONLY_ON_FAILURE", origOnFailure)
 	}()
 
 	// Set test values
 	os.Setenv("PROW_HELPER_DEST", "/env/path")
 	os.Setenv("PROW_HELPER_ANALYZE_CMD", "env-command")
 	os.Setenv("NTFY_CHANNEL", "test-channel")
+	os.Setenv("PROW_HELPER_ONLY_ON_FAILURE", "true")
 
 	cfg := LoadEnvConfig()
 
@@ -114,6 +124,9 @@ func TestLoadEnvConfig(t *testing.T) {
 	}
 	if cfg.NtfyChannel != "test-channel" {
 		t.Errorf("LoadEnvConfig().NtfyChannel = %v, want %v", cfg.NtfyChannel, "test-channel")
+	}
+	if cfg.OnlyOnFailure != true {
+		t.Errorf("LoadEnvConfig().OnlyOnFailure = %v, want true", cfg.OnlyOnFailure)
 	}
 }
 
@@ -211,6 +224,54 @@ func TestMergeConfig(t *testing.T) {
 			}
 			if result.AnalyzeCmd != tt.wantCmd {
 				t.Errorf("MergeConfig().AnalyzeCmd = %v, want %v", result.AnalyzeCmd, tt.wantCmd)
+			}
+		})
+	}
+}
+
+func TestMergeConfig_OnlyOnFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		cli  *Config
+		env  *Config
+		file *Config
+		want bool
+	}{
+		{
+			name: "all false/nil",
+			cli:  nil,
+			env:  nil,
+			file: nil,
+			want: false,
+		},
+		{
+			name: "set by file only",
+			cli:  nil,
+			env:  nil,
+			file: &Config{OnlyOnFailure: true},
+			want: true,
+		},
+		{
+			name: "set by env only",
+			cli:  nil,
+			env:  &Config{OnlyOnFailure: true},
+			file: &Config{OnlyOnFailure: false},
+			want: true,
+		},
+		{
+			name: "set by cli only",
+			cli:  &Config{OnlyOnFailure: true},
+			env:  &Config{OnlyOnFailure: false},
+			file: &Config{OnlyOnFailure: false},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MergeConfig(tt.cli, tt.env, tt.file, DefaultConfig())
+			if result.OnlyOnFailure != tt.want {
+				t.Errorf("MergeConfig().OnlyOnFailure = %v, want %v", result.OnlyOnFailure, tt.want)
 			}
 		})
 	}

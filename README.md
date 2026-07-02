@@ -143,6 +143,9 @@ interval: 5m
 
 # ntfy.sh channel for push notifications (optional)
 ntfy_channel: my-prow-notifications
+
+# Only download/analyze artifacts if the job failed (default: false)
+only_on_failure: true
 ```
 
 With this config, downloading and analyzing is just:
@@ -164,6 +167,7 @@ export PROW_HELPER_DEST=~/my-artifacts
 export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
 export PROW_HELPER_INTERVAL=5m
 export NTFY_CHANNEL=my-prow-notifications
+export PROW_HELPER_ONLY_ON_FAILURE=true
 ```
 
 ### Configuration Priority

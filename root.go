@@ -230,10 +230,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			// Multiple jobs with --watch: use the multi-job monitor flow
 			if flagWatch && len(jobs) > 1 {
 				cfg, cfgErr := config.Load(&config.Config{
-					Dest:        flagDest,
-					AnalyzeCmd:  flagAnalyzeCmd,
-					NtfyChannel: flagNtfyChannel,
-					Interval:    flagInterval,
+					Dest:          flagDest,
+					AnalyzeCmd:    flagAnalyzeCmd,
+					NtfyChannel:   flagNtfyChannel,
+					Interval:      flagInterval,
+					OnlyOnFailure: flagOnFailure,
 				}, flagConfig)
 				if cfgErr != nil {
 					fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
@@ -245,7 +246,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 					return monErr
 				}
 				if flagDownload && len(completed) > 0 {
-					downloadMonitoredEntries(completed, cfg, sendNotification, flagOnFailure)
+					downloadMonitoredEntries(completed, cfg, sendNotification, cfg.OnlyOnFailure)
 				}
 				return nil
 			}
@@ -286,7 +287,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 						return monErr
 					}
 					if flagDownload && len(completed) > 0 {
-						downloadMonitoredEntries(completed, cfg, sendNotification, flagOnFailure)
+						downloadMonitoredEntries(completed, cfg, sendNotification, cfg.OnlyOnFailure)
 					}
 					return nil
 				}
@@ -328,10 +329,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 	// Step 3: Load configuration
 	cliConfig := &config.Config{
-		Dest:        flagDest,
-		AnalyzeCmd:  flagAnalyzeCmd,
-		NtfyChannel: flagNtfyChannel,
-		Interval:    flagInterval,
+		Dest:          flagDest,
+		AnalyzeCmd:    flagAnalyzeCmd,
+		NtfyChannel:   flagNtfyChannel,
+		Interval:      flagInterval,
+		OnlyOnFailure: flagOnFailure,
 	}
 
 	cfg, err := config.Load(cliConfig, flagConfig)
@@ -379,13 +381,13 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			return nil
 		}
 
-		if flagOnFailure && status.Passed {
+		if cfg.OnlyOnFailure && status.Passed {
 			fmt.Println("Job passed; skipping download and analysis (--only-on-failure)")
 			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, status.Passed), status.Passed, cfg.NtfyChannel, true)
 			return nil
 		}
 		// --download is set: fall through to download artifacts
-	} else if flagOnFailure {
+	} else if cfg.OnlyOnFailure {
 		// No --watch: check the job's current status once before downloading.
 		finishedURL := watcher.BuildFinishedJSONURL(metadata)
 		status, statusErr := watcher.CheckJobStatus(finishedURL)
