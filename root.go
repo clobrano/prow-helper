@@ -45,6 +45,7 @@ var (
 	flagNotifyComplete bool // Internal flag set by background mode
 	flagWatch          bool
 	flagDownload       bool
+	flagOnFailure      bool
 	flagNtfyChannel    string
 	flagInterval       time.Duration
 	flagConfig         string
@@ -94,6 +95,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Watch running jobs until completion")
 	rootCmd.Flags().BoolVar(&flagDownload, "download", false, "Download test artifacts")
 	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run on downloaded artifacts (requires --download)")
+	rootCmd.Flags().BoolVar(&flagOnFailure, "only-on-failure", false, "Only download/analyze artifacts if the job failed (requires --download)")
 	rootCmd.Flags().DurationVar(&flagInterval, "interval", 0, "Polling interval for --watch status checks (default: 15m)")
 	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
@@ -145,6 +147,12 @@ func runMain(cmd *cobra.Command, args []string) error {
 
 	if flagAnalyzeCmd != "" && !flagDownload {
 		fmt.Fprintln(os.Stderr, "Error: --analyze-cmd requires --download")
+		os.Exit(ExitConfigError)
+		return nil
+	}
+
+	if flagOnFailure && !flagDownload {
+		fmt.Fprintln(os.Stderr, "Error: --only-on-failure requires --download")
 		os.Exit(ExitConfigError)
 		return nil
 	}
@@ -237,7 +245,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 					return monErr
 				}
 				if flagDownload && len(completed) > 0 {
-					downloadMonitoredEntries(completed, cfg, sendNotification)
+					downloadMonitoredEntries(completed, cfg, sendNotification, flagOnFailure)
 				}
 				return nil
 			}
@@ -278,7 +286,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 						return monErr
 					}
 					if flagDownload && len(completed) > 0 {
-						downloadMonitoredEntries(completed, cfg, sendNotification)
+						downloadMonitoredEntries(completed, cfg, sendNotification, flagOnFailure)
 					}
 					return nil
 				}
@@ -370,7 +378,31 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			}
 			return nil
 		}
+
+		if flagOnFailure && status.Passed {
+			fmt.Println("Job passed; skipping download and analysis (--only-on-failure)")
+			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, status.Passed), status.Passed, cfg.NtfyChannel, true)
+			return nil
+		}
 		// --download is set: fall through to download artifacts
+	} else if flagOnFailure {
+		// No --watch: check the job's current status once before downloading.
+		finishedURL := watcher.BuildFinishedJSONURL(metadata)
+		status, statusErr := watcher.CheckJobStatus(finishedURL)
+		if statusErr != nil {
+			errMsg := fmt.Sprintf("Failed to check job status: %v", statusErr)
+			fmt.Fprintln(os.Stderr, errMsg)
+			sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, sendNotification)
+			os.Exit(ExitWatchFailed)
+			return nil
+		}
+		if status == nil {
+			fmt.Println("Warning: job has not finished yet; cannot verify pass/fail status for --only-on-failure, proceeding with download")
+		} else if status.Passed {
+			fmt.Println("Job passed; skipping download and analysis (--only-on-failure)")
+			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, status.Passed), status.Passed, cfg.NtfyChannel, sendNotification)
+			return nil
+		}
 	}
 
 	if !flagDownload {
@@ -443,8 +475,9 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 }
 
 // downloadMonitoredEntries downloads artifacts for each completed job from
-// the monitor flow, and optionally runs analysis on each.
-func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendNotification bool) {
+// the monitor flow, and optionally runs analysis on each. When onFailureOnly
+// is true, jobs that passed are skipped.
+func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendNotification bool, onFailureOnly bool) {
 	for _, e := range entries {
 		if e.status == nil || !e.status.Finished {
 			continue
@@ -453,6 +486,11 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendN
 		jobDisplay := e.metadata.JobName
 		if e.prRef != "" {
 			jobDisplay = e.prRef + " " + e.metadata.JobName
+		}
+
+		if onFailureOnly && e.status.Passed {
+			fmt.Printf("Skipping %s: job passed (--only-on-failure)\n", jobDisplay)
+			continue
 		}
 
 		destPath, skip, err := downloader.ResolveDestination(cfg.Dest, e.metadata, os.Stdin, os.Stdout)

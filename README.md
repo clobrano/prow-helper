@@ -72,8 +72,9 @@ It accepts three types of input URLs: direct PROW URLs, GitHub PR URLs, and Prow
 | `--watch` | Watch running jobs until completion and notify |
 | `--download` | Download test artifacts |
 | `--analyze-cmd` | Run a command on downloaded artifacts (requires `--download`) |
+| `--only-on-failure` | Only download/analyze artifacts if the job failed (requires `--download`) |
 
-These can be combined: `--watch --download` watches until the job completes, then downloads. Add `--analyze-cmd` to also run analysis after download.
+These can be combined: `--watch --download` watches until the job completes, then downloads. Add `--analyze-cmd` to also run analysis after download. Add `--only-on-failure` to skip the download (and analysis) entirely when the job passed — handy when you only care about investigating failures.
 
 ### Quick Examples
 
@@ -107,6 +108,7 @@ prow-helper --watch --background <url>
 | `--watch` | Watch running jobs until completion |
 | `--download` | Download test artifacts |
 | `--analyze-cmd` | Command to run on downloaded artifacts (requires `--download`) |
+| `--only-on-failure` | Only download/analyze artifacts if the job failed (requires `--download`) |
 | `--interval` | Polling interval for `--watch` status checks (default: 15m) |
 | `--config` | Path to config file (default: `~/.config/prow-helper/config.yaml`) |
 | `--dest` | Download destination directory (supports `~/` expansion) |
@@ -261,7 +263,12 @@ prow-helper --watch --download <url>
 
 # Watch, download, and analyze
 prow-helper --watch --download --analyze-cmd "claude 'analyze these failures'" <url>
+
+# Watch, and only download + analyze if the job failed
+prow-helper --watch --download --analyze-cmd "claude 'analyze these failures'" --only-on-failure <url>
 ```
+
+`--only-on-failure` also works with `--download` alone (no `--watch`): prow-helper checks the job's current `finished.json` once before downloading, and skips the download (and analysis) if the job passed.
 
 ### ntfy.sh Push Notifications
 
