@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/adrg/xdg"
@@ -12,21 +11,19 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	Dest          string        `yaml:"dest"`            // Download destination directory
-	AnalyzeCmd    string        `yaml:"analyze_cmd"`     // Command to run after download
-	NtfyChannel   string        `yaml:"ntfy_channel"`    // ntfy.sh channel for notifications
-	Interval      time.Duration `yaml:"interval"`        // Polling interval for --watch
-	OnlyOnFailure bool          `yaml:"only_on_failure"` // Only download/analyze when the job failed
+	Dest        string        `yaml:"dest"`         // Download destination directory
+	AnalyzeCmd  string        `yaml:"analyze_cmd"`  // Command to run after download
+	NtfyChannel string        `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
+	Interval    time.Duration `yaml:"interval"`     // Polling interval for --watch
 }
 
 // DefaultConfig returns a Config with default values.
 func DefaultConfig() *Config {
 	return &Config{
-		Dest:          ".",
-		AnalyzeCmd:    "",
-		NtfyChannel:   "",
-		Interval:      15 * time.Minute,
-		OnlyOnFailure: false,
+		Dest:        ".",
+		AnalyzeCmd:  "",
+		NtfyChannel: "",
+		Interval:    15 * time.Minute,
 	}
 }
 
@@ -67,18 +64,11 @@ func LoadEnvConfig() *Config {
 			cfg.Interval = d
 		}
 	}
-	if v := os.Getenv("PROW_HELPER_ONLY_ON_FAILURE"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			cfg.OnlyOnFailure = b
-		}
-	}
 	return cfg
 }
 
 // MergeConfig merges configurations with priority: cli > env > file > defaults.
 // Non-empty values from higher priority configs override lower priority values.
-// OnlyOnFailure has no "unset" representation (its zero value, false, is also
-// its default), so it is merged by OR: it is enabled if any source enables it.
 func MergeConfig(cli, env, file, defaults *Config) *Config {
 	result := &Config{}
 
@@ -88,7 +78,6 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		result.AnalyzeCmd = defaults.AnalyzeCmd
 		result.NtfyChannel = defaults.NtfyChannel
 		result.Interval = defaults.Interval
-		result.OnlyOnFailure = defaults.OnlyOnFailure
 	}
 
 	// Override with file config
@@ -104,9 +93,6 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if file.Interval != 0 {
 			result.Interval = file.Interval
-		}
-		if file.OnlyOnFailure {
-			result.OnlyOnFailure = true
 		}
 	}
 
@@ -124,9 +110,6 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if env.Interval != 0 {
 			result.Interval = env.Interval
 		}
-		if env.OnlyOnFailure {
-			result.OnlyOnFailure = true
-		}
 	}
 
 	// Override with CLI config
@@ -142,9 +125,6 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if cli.Interval != 0 {
 			result.Interval = cli.Interval
-		}
-		if cli.OnlyOnFailure {
-			result.OnlyOnFailure = true
 		}
 	}
 

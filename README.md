@@ -8,9 +8,9 @@ Working with PROW CI typically means juggling browser tabs, polling job pages fo
 
 Use `--watch` to monitor running jobs — point it at a PROW job URL, a GitHub PR, or a Prow status page and it will poll until completion, showing live progress and sending desktop or mobile notifications when jobs finish.
 
-Use `--download` to pull artifacts from GCS, and pair it with `--analyze-cmd` to hand them off to an AI tool like Claude or Gemini (or any other command) for automated failure analysis.
+Use `--download` to pull artifacts from GCS unconditionally, or `--analyze` to download (if needed) and hand them off to an AI tool like Claude or Gemini (or any other command, configured via `--analyze-cmd`) for automated failure analysis. Use `--analyze-on-failure` instead of `--analyze` to only bother downloading and analyzing jobs that actually failed.
 
-These flags compose naturally — `--watch --download --analyze-cmd "..."` watches a job, downloads artifacts when it completes, and runs analysis in one go.
+These flags compose naturally — `--watch --analyze-cmd "..." --analyze-on-failure` watches a job, and only downloads and analyzes it if it fails.
 
 ## Features
 
@@ -21,8 +21,9 @@ These flags compose naturally — `--watch --download --analyze-cmd "..."` watch
 - **ntfy.sh Push Notifications**: Receive mobile alerts via [ntfy.sh](https://ntfy.sh)
 
 ### Download & Analysis
-- **Download** (`--download`): Download test artifacts from Google Cloud Storage
-- **Analysis** (`--analyze-cmd`): Run any command (Claude, Gemini, custom scripts) on downloaded artifacts; requires `--download`
+- **Download** (`--download`): Unconditionally download test artifacts from Google Cloud Storage
+- **Analysis** (`--analyze`): Download (if needed) and run any command (Claude, Gemini, custom scripts) on the artifacts, configured via `--analyze-cmd`
+- **Conditional Analysis** (`--analyze-on-failure`): Like `--analyze`, but only downloads/analyzes jobs that failed
 - **Multiple Input Types**: Accepts direct PROW URLs, GitHub PR URLs, or any web page containing PROW links
 - **Smart Job Discovery**: Automatically fetches associated PROW jobs from GitHub PRs via the Prow API, with interactive selection when multiple jobs are found
 - **Parallel Downloads**: Uses `gsutil -m cp -r` for fast parallel downloads
@@ -67,14 +68,16 @@ It accepts three types of input URLs: direct PROW URLs, GitHub PR URLs, and Prow
 
 ### Action Flags
 
+Each of these is independent — pass any combination that makes sense for your workflow. At least one is required.
+
 | Flag | Description |
 |------|-------------|
 | `--watch` | Watch running jobs until completion and notify |
-| `--download` | Download test artifacts |
-| `--analyze-cmd` | Run a command on downloaded artifacts (requires `--download`) |
-| `--only-on-failure` | Only download/analyze artifacts if the job failed (requires `--download`) |
+| `--download` | Unconditionally download test artifacts |
+| `--analyze` | Download (if needed) and analyze artifacts with the configured `--analyze-cmd` |
+| `--analyze-on-failure` | Like `--analyze`, but only downloads/analyzes if the job failed (mutually exclusive with `--analyze`) |
 
-These can be combined: `--watch --download` watches until the job completes, then downloads. Add `--analyze-cmd` to also run analysis after download. Add `--only-on-failure` to skip the download (and analysis) entirely when the job passed — handy when you only care about investigating failures.
+`--download` always downloads, regardless of whether the job passed or failed — it never checks job status. `--analyze` and `--analyze-on-failure` each trigger their own download automatically, so you don't need to pass `--download` alongside them (though you can — e.g. `--download --analyze-on-failure` downloads every run but only analyzes the failures).
 
 ### Quick Examples
 
@@ -92,10 +95,13 @@ prow-helper --watch "https://prow.ci.openshift.org/?author=<your-username>"
 prow-helper --download --dest ~/prow-artifacts <url>
 
 # Download and analyze with Claude
-prow-helper --download --analyze-cmd "claude 'analyze these test failures'" <url>
+prow-helper --analyze --analyze-cmd "claude 'analyze these test failures'" <url>
 
-# Watch, then download and analyze when complete
-prow-helper --watch --download --analyze-cmd "claude 'analyze'" <url>
+# Watch, then analyze when complete (downloads automatically)
+prow-helper --watch --analyze --analyze-cmd "claude 'analyze'" <url>
+
+# Watch, and only analyze if the job failed
+prow-helper --watch --analyze-on-failure --analyze-cmd "claude 'analyze'" <url>
 
 # Run in background with notification
 prow-helper --watch --background <url>
@@ -106,9 +112,10 @@ prow-helper --watch --background <url>
 | Flag | Description |
 |------|-------------|
 | `--watch` | Watch running jobs until completion |
-| `--download` | Download test artifacts |
-| `--analyze-cmd` | Command to run on downloaded artifacts (requires `--download`) |
-| `--only-on-failure` | Only download/analyze artifacts if the job failed (requires `--download`) |
+| `--download` | Unconditionally download test artifacts |
+| `--analyze` | Download (if needed) and analyze artifacts |
+| `--analyze-on-failure` | Like `--analyze`, but only if the job failed |
+| `--analyze-cmd` | Command to run during analysis (used with `--analyze` or `--analyze-on-failure`) |
 | `--interval` | Polling interval for `--watch` status checks (default: 15m) |
 | `--config` | Path to config file (default: `~/.config/prow-helper/config.yaml`) |
 | `--dest` | Download destination directory (supports `~/` expansion) |
@@ -119,7 +126,7 @@ prow-helper --watch --background <url>
 
 ## Configuration
 
-The config file provides default values for `--dest`, `--analyze-cmd`, and `--ntfy-channel` so you don't have to pass them on every invocation. You still need to specify an action flag (`--watch` or `--download`) on the command line.
+The config file provides default values for `--dest`, `--analyze-cmd`, and `--ntfy-channel` so you don't have to pass them on every invocation. You still need to specify an action flag (`--watch`, `--download`, `--analyze`, or `--analyze-on-failure`) on the command line — actions are never read from the config file.
 
 ### Configuration File
 
@@ -128,14 +135,14 @@ Default location: `~/.config/prow-helper/config.yaml` (follows XDG Base Director
 Use `--config` to point to a different file:
 
 ```bash
-prow-helper --config ~/my-config.yaml --download <url>
+prow-helper --config ~/my-config.yaml --analyze <url>
 ```
 
 ```yaml
 # Download destination
 dest: ~/prow-artifacts
 
-# Command to run after download (artifact path appended as last argument)
+# Command to run during analysis (artifact path appended as last argument)
 analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
 
 # Polling interval for --watch (default: 15m)
@@ -143,21 +150,18 @@ interval: 5m
 
 # ntfy.sh channel for push notifications (optional)
 ntfy_channel: my-prow-notifications
-
-# Only download/analyze artifacts if the job failed (default: false)
-only_on_failure: true
 ```
 
 With this config, downloading and analyzing is just:
 
 ```bash
-prow-helper --download <url>
+prow-helper --analyze <url>
 ```
 
-Or watch a job, then download and analyze when it completes:
+Or watch a job, then analyze it when it completes:
 
 ```bash
-prow-helper --watch --download <url>
+prow-helper --watch --analyze <url>
 ```
 
 ### Environment Variables
@@ -167,7 +171,6 @@ export PROW_HELPER_DEST=~/my-artifacts
 export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
 export PROW_HELPER_INTERVAL=5m
 export NTFY_CHANNEL=my-prow-notifications
-export PROW_HELPER_ONLY_ON_FAILURE=true
 ```
 
 ### Configuration Priority
@@ -247,32 +250,38 @@ prow-helper --download "https://github.com/openshift/cluster-network-operator/pu
 
 ### Download and Analyze
 
-`--analyze-cmd` runs any command on the downloaded artifacts. It requires `--download`.
+`--analyze` downloads the artifacts (if not already present) and runs `--analyze-cmd` on them. It does not require `--download`.
 
 ```bash
 # Download and analyze with Claude
-prow-helper --download --analyze-cmd "claude 'analyze the Prow test artifacts contained in this folder'" <url>
+prow-helper --analyze --analyze-cmd "claude 'analyze the Prow test artifacts contained in this folder'" <url>
 
 # Or configure the analysis command once in ~/.config/prow-helper/config.yaml:
 #   dest: ~/prow-artifacts
 #   analyze_cmd: "claude 'analyze the Prow test artifacts contained in this folder'"
-prow-helper --download <url>
+prow-helper --analyze <url>
+
+# Only analyze if the job failed — skips download entirely when it passed
+prow-helper --analyze-on-failure <url>
 ```
 
-### Combining Watch + Download
+`--analyze-on-failure` also works with `--watch` (no separate status check needed, since watch already knows the outcome) or on its own against an already-finished job (prow-helper checks `finished.json` once before deciding).
+
+### Combining Watch, Download, and Analyze
 
 ```bash
 # Watch a job, then download artifacts when it completes
 prow-helper --watch --download <url>
 
-# Watch, download, and analyze
-prow-helper --watch --download --analyze-cmd "claude 'analyze these failures'" <url>
+# Watch, then download and analyze (no need to also pass --download)
+prow-helper --watch --analyze --analyze-cmd "claude 'analyze these failures'" <url>
 
-# Watch, and only download + analyze if the job failed
-prow-helper --watch --download --analyze-cmd "claude 'analyze these failures'" --only-on-failure <url>
+# Watch, and only analyze if the job failed
+prow-helper --watch --analyze-on-failure --analyze-cmd "claude 'analyze these failures'" <url>
+
+# Always download every run, but only analyze the ones that failed
+prow-helper --watch --download --analyze-on-failure --analyze-cmd "claude 'analyze these failures'" <url>
 ```
-
-`--only-on-failure` also works with `--download` alone (no `--watch`): prow-helper checks the job's current `finished.json` once before downloading, and skips the download (and analysis) if the job passed.
 
 ### ntfy.sh Push Notifications
 
