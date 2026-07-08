@@ -38,8 +38,15 @@ type model struct {
 	refreshing  bool
 	refreshErr  error
 	lastRefresh time.Time
-	height      int // terminal height (0 = unknown)
-	width       int // terminal width (0 = unknown)
+	// confirmEmpty is set when ENTER is pressed with nothing selected;
+	// a second ENTER confirms exiting without a selection, any other key
+	// dismisses the confirmation and resumes normal input handling.
+	confirmEmpty bool
+	// single switches the UI to single-select mode: ENTER picks the item
+	// under the cursor; checkboxes, SPACE and Ctrl+A are disabled.
+	single bool
+	height int // terminal height (0 = unknown)
+	width  int // terminal width (0 = unknown)
 }
 
 func newModel(items []Item, refreshFn func() ([]Item, error)) model {
@@ -50,6 +57,12 @@ func newModel(items []Item, refreshFn func() ([]Item, error)) model {
 		lastRefresh: time.Now(),
 	}
 	m.refilter()
+	return m
+}
+
+func newSingleModel(items []Item, refreshFn func() ([]Item, error)) model {
+	m := newModel(items, refreshFn)
+	m.single = true
 	return m
 }
 
@@ -69,6 +82,17 @@ func (m *model) refilter() {
 	case m.cursor >= len(m.filtered):
 		m.cursor = len(m.filtered) - 1
 	}
+}
+
+// countSelected returns the number of currently selected items.
+func (m model) countSelected() int {
+	n := 0
+	for _, v := range m.selected {
+		if v {
+			n++
+		}
+	}
+	return n
 }
 
 // fuzzyMatch returns true if query is a case-insensitive substring of target.
@@ -153,6 +177,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.confirmEmpty && msg.Type != tea.KeyEnter {
+			// Any key other than a second ENTER dismisses the confirmation;
+			// the key is then handled normally below.
+			m.confirmEmpty = false
+		}
 		switch msg.Type {
 
 		case tea.KeyCtrlC:
@@ -170,6 +199,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			if m.single {
+				// Single-select: ENTER picks the item under the cursor.
+				if len(m.filtered) == 0 {
+					return m, nil
+				}
+				m.selected = map[int]bool{m.filtered[m.cursor]: true}
+				m.done = true
+				return m, tea.Quit
+			}
+			if m.countSelected() == 0 && !m.confirmEmpty {
+				m.confirmEmpty = true
+				return m, nil
+			}
 			m.done = true
 			return m, tea.Quit
 
@@ -184,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeySpace:
-			if len(m.filtered) > 0 {
+			if !m.single && len(m.filtered) > 0 {
 				idx := m.filtered[m.cursor]
 				m.selected[idx] = !m.selected[idx]
 			}
@@ -197,6 +239,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyCtrlA:
+			if m.single {
+				break
+			}
 			// Toggle all visible items.  If any are unselected, select all;
 			// if all are already selected, deselect all.
 			allSelected := true
@@ -252,6 +297,10 @@ func (m model) View() string {
 			if i == m.cursor {
 				cursor = "> "
 			}
+			if m.single {
+				fmt.Fprintf(&sb, "  %s%s\n", cursor, m.items[fi].Label)
+				continue
+			}
 			check := "[ ]"
 			if m.selected[fi] {
 				check = "[x]"
@@ -261,15 +310,17 @@ func (m model) View() string {
 	}
 
 	// Footer.
-	nSel := 0
-	for _, v := range m.selected {
-		if v {
-			nSel++
-		}
+	nSel := m.countSelected()
+
+	if m.confirmEmpty {
+		fmt.Fprintf(&sb, "\n  No jobs selected — press ENTER again to exit without watching, or any other key to keep selecting\n")
+		return sb.String()
 	}
 
 	var refreshStatus string
 	switch {
+	case m.refreshFn == nil:
+		// No refresh source: omit the refresh hint and status entirely.
 	case m.refreshing:
 		refreshStatus = "  [refreshing...]"
 	case m.refreshErr != nil:
@@ -278,8 +329,18 @@ func (m model) View() string {
 		refreshStatus = fmt.Sprintf("  [last refresh: %s]", m.lastRefresh.Local().Format("15:04:05"))
 	}
 
-	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all  Ctrl+R refresh  ENTER confirm  ESC cancel%s\n",
-		len(m.filtered), len(m.items), nSel, refreshStatus)
+	refreshHint := ""
+	if m.refreshFn != nil {
+		refreshHint = "  Ctrl+R refresh"
+	}
+
+	if m.single {
+		fmt.Fprintf(&sb, "\n  %d/%d shown  |  ↑↓ navigate%s  ENTER select  ESC cancel%s\n",
+			len(m.filtered), len(m.items), refreshHint, refreshStatus)
+	} else {
+		fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all%s  ENTER confirm  ESC cancel%s\n",
+			len(m.filtered), len(m.items), nSel, refreshHint, refreshStatus)
+	}
 
 	return sb.String()
 }
@@ -287,6 +348,8 @@ func (m model) View() string {
 // Run presents the interactive fuzzy multi-select UI and returns the indices
 // (into the original items slice) that the user selected.
 // Returns nil without an error if the user cancels (ESC or Ctrl+C).
+// Confirming with ENTER while nothing is selected asks for a second ENTER,
+// since exiting without a selection is most likely a mistake.
 // refreshFn, if non-nil, is called when the user presses Ctrl+R to reload
 // the item list; previously-selected items are re-selected by Key.
 func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
@@ -311,4 +374,30 @@ func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
 		}
 	}
 	return result, nil
+}
+
+// RunSingle presents the interactive fuzzy list in single-select mode and
+// returns the index (into items) of the item the user picked with ENTER.
+// Returns -1 without an error if the user cancels (ESC or Ctrl+C).
+// refreshFn, if non-nil, is called when the user presses Ctrl+R.
+func RunSingle(items []Item, refreshFn func() ([]Item, error)) (int, error) {
+	if len(items) == 0 {
+		return -1, fmt.Errorf("no items to select from")
+	}
+	p := tea.NewProgram(newSingleModel(items, refreshFn), tea.WithAltScreen())
+	final, err := p.Run()
+	if err != nil {
+		return -1, fmt.Errorf("selector: %w", err)
+	}
+
+	fm := final.(model)
+	if fm.quit || !fm.done {
+		return -1, nil
+	}
+	for idx, sel := range fm.selected {
+		if sel {
+			return idx, nil
+		}
+	}
+	return -1, nil
 }

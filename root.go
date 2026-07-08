@@ -35,6 +35,7 @@ const (
 	ExitConfigError    = 4
 	ExitWatchFailed    = 5
 	ExitJobFailed      = 6
+	ExitInterrupted    = 130 // 128 + SIGINT, the conventional interrupt exit code
 )
 
 var (
@@ -50,7 +51,15 @@ var (
 	flagNtfyChannel      string
 	flagInterval         time.Duration
 	flagConfig           string
+	flagOnConflict       string
 )
+
+// anyDownloadAction reports whether any action flag may trigger an artifact
+// download (--analyze-on-failure only does so conditionally, once the job's
+// pass/fail status is known).
+func anyDownloadAction() bool {
+	return flagDownload || flagAnalyze || flagAnalyzeOnFailure
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -63,7 +72,7 @@ It accepts a PROW test URL, a GitHub pull request URL, a Prow status page URL,
 or any page containing prow job links.
 
 When using --watch without a URL inside a git repository that has an open
-pull request, prow-helper will auto-detect the PR and offer to watch it.
+pull request, prow-helper will auto-detect the PR and watch it.
 
 At least one action flag is required:
   --watch               Watch running jobs until completion
@@ -105,6 +114,7 @@ func init() {
 	rootCmd.Flags().DurationVar(&flagInterval, "interval", 0, "Polling interval for --watch status checks (default: 15m)")
 	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
+	rootCmd.Flags().StringVar(&flagOnConflict, "on-conflict", "", "How to handle an existing download folder: prompt|overwrite|skip|new (default: prompt)")
 	rootCmd.Flags().StringVar(&flagNtfyChannel, "ntfy-channel", "", "ntfy.sh channel for notifications")
 	rootCmd.Flags().BoolVar(&flagBackground, "background", false, "Run in background and notify when done")
 	rootCmd.Flags().BoolVar(&flagNotifyComplete, "notify-on-complete", false, "Internal flag for background mode notifications")
@@ -131,17 +141,7 @@ func runMain(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		}
 
-		fmt.Printf("Detected PR: %s\nWatch it? [Y/n]: ", detectedURL)
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read input: %w", err)
-		}
-		input = strings.TrimSpace(strings.ToLower(input))
-		if input != "" && input != "y" && input != "yes" {
-			fmt.Println("Aborted.")
-			return nil
-		}
+		fmt.Printf("Detected PR: %s\n", detectedURL)
 		args = []string{detectedURL}
 	}
 
@@ -202,6 +202,53 @@ func runInBackground(args []string) error {
 	return nil
 }
 
+// loadConfig loads the merged configuration (CLI > env > file > defaults) and
+// validates the destination-conflict policy. In background mode a "prompt"
+// policy is coerced to "new" (timestamped folder) so that a detached process
+// can never block forever waiting for interactive input.
+func loadConfig() (*config.Config, downloader.ConflictPolicy, error) {
+	cfg, err := config.Load(&config.Config{
+		Dest:        flagDest,
+		AnalyzeCmd:  flagAnalyzeCmd,
+		NtfyChannel: flagNtfyChannel,
+		Interval:    flagInterval,
+		OnConflict:  flagOnConflict,
+	}, flagConfig)
+	if err != nil {
+		return nil, "", err
+	}
+
+	policy, err := downloader.ParseConflictPolicy(cfg.OnConflict)
+	if err != nil {
+		return nil, "", err
+	}
+
+	if flagNotifyComplete && policy == downloader.PolicyPrompt {
+		policy = downloader.PolicyNew
+	}
+	return cfg, policy, nil
+}
+
+// finishMonitorWorkflow handles the aftermath of a multi-job monitor run:
+// downloads/analysis for completed jobs (skipped when interrupted) and the
+// final exit code — ExitInterrupted on Ctrl+C, ExitJobFailed when any job failed.
+func finishMonitorWorkflow(completed []*monitorEntry, interrupted bool, cfg *config.Config, policy downloader.ConflictPolicy, sendNotification bool) error {
+	if interrupted {
+		if anyDownloadAction() {
+			fmt.Println("Skipping download (interrupted).")
+		}
+		os.Exit(ExitInterrupted)
+		return nil
+	}
+	if anyDownloadAction() && len(completed) > 0 {
+		downloadMonitoredEntries(completed, cfg, policy, sendNotification, flagDownload, flagAnalyze, flagAnalyzeOnFailure)
+	}
+	if anyMonitoredFailed(completed) {
+		os.Exit(ExitJobFailed)
+	}
+	return nil
+}
+
 // executeWorkflow runs the main workflow based on the action flags:
 //   - --watch: watch running jobs until completion
 //   - --download: unconditionally download test artifacts
@@ -210,14 +257,7 @@ func runInBackground(args []string) error {
 func executeWorkflow(prowURL string, sendNotification bool) error {
 	// Step 0: Load configuration up front; it doesn't depend on the URL and
 	// every code path below needs it.
-	cliConfig := &config.Config{
-		Dest:        flagDest,
-		AnalyzeCmd:  flagAnalyzeCmd,
-		NtfyChannel: flagNtfyChannel,
-		Interval:    flagInterval,
-	}
-
-	cfg, err := config.Load(cliConfig, flagConfig)
+	cfg, policy, err := loadConfig()
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to load configuration: %v", err)
 		fmt.Fprintln(os.Stderr, errMsg)
@@ -238,7 +278,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	// wantDownload is true whenever any action flag implies fetching artifacts.
 	// --analyze-on-failure only implies it conditionally, once the job's
 	// pass/fail status is known, so it's handled separately below.
-	wantDownload := flagDownload || flagAnalyze || flagAnalyzeOnFailure
+	wantDownload := anyDownloadAction()
 
 	// Step 1: Validate URL; if not a direct prow URL, try to resolve it
 	if err := parser.ValidateURL(prowURL); err != nil {
@@ -261,14 +301,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 			// Multiple jobs with --watch: use the multi-job monitor flow
 			if flagWatch && len(jobs) > 1 {
-				completed, monErr := runMonitorFlowForPR(pr, jobs, cfg.Interval, cfg.NtfyChannel)
+				completed, interrupted, monErr := runMonitorFlowForPR(pr, jobs, cfg, policy)
 				if monErr != nil {
 					return monErr
 				}
-				if wantDownload && len(completed) > 0 {
-					downloadMonitoredEntries(completed, cfg, sendNotification, flagDownload, flagAnalyze, flagAnalyzeOnFailure)
-				}
-				return nil
+				return finishMonitorWorkflow(completed, interrupted, cfg, policy, sendNotification)
 			}
 
 			// Single job: select automatically
@@ -291,14 +328,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			if flagWatch {
 				jobs, fetchErr := prowapi.FetchJobs(prowURL)
 				if fetchErr == nil && len(jobs) > 0 {
-					completed, monErr := runMonitorFlow(prowURL, jobs, cfg.Interval, cfg.NtfyChannel)
+					completed, interrupted, monErr := runMonitorFlow(prowURL, jobs, cfg, policy)
 					if monErr != nil {
 						return monErr
 					}
-					if wantDownload && len(completed) > 0 {
-						downloadMonitoredEntries(completed, cfg, sendNotification, flagDownload, flagAnalyze, flagAnalyzeOnFailure)
-					}
-					return nil
+					return finishMonitorWorkflow(completed, interrupted, cfg, policy, sendNotification)
 				}
 			}
 
@@ -347,7 +381,38 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		jobDisplay = metadata.PRRef + " " + metadata.JobName
 	}
 
-	// Step 3: Determine the job's pass/fail status, either by watching it to
+	// Step 3: If any action may download artifacts, decide the destination now —
+	// before a potentially hours-long watch — so any conflict question is asked
+	// while the user is still at the terminal. Deletion for "overwrite" is
+	// deferred until the download actually starts (Step 5).
+	var (
+		destBase       string
+		destResolution downloader.ConflictResolution
+	)
+	if wantDownload {
+		destBase = downloader.BuildDestinationPath(cfg.Dest, metadata)
+		exists, checkErr := downloader.CheckDestinationConflict(destBase)
+		if checkErr != nil {
+			errMsg := fmt.Sprintf("Failed to resolve destination: %v", checkErr)
+			fmt.Fprintln(os.Stderr, errMsg)
+			sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, sendNotification)
+			os.Exit(ExitDownloadFailed)
+			return nil
+		}
+		destResolution = downloader.Overwrite // no conflict: plain download into destBase
+		if exists {
+			destResolution, err = downloader.ResolveConflictAction(destBase, policy, os.Stdin, os.Stdout)
+			if err != nil {
+				errMsg := fmt.Sprintf("Failed to resolve destination: %v", err)
+				fmt.Fprintln(os.Stderr, errMsg)
+				sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, sendNotification)
+				os.Exit(ExitDownloadFailed)
+				return nil
+			}
+		}
+	}
+
+	// Step 4: Determine the job's pass/fail status, either by watching it to
 	// completion or, if --analyze-on-failure needs it and we're not
 	// watching, with a single status check.
 	var jobStatus *watcher.JobStatus
@@ -409,8 +474,8 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		return nil
 	}
 
-	// Step 4: Resolve destination with conflict handling
-	destPath, skip, err := downloader.ResolveDestination(cfg.Dest, metadata, os.Stdin, os.Stdout)
+	// Step 5: Apply the destination resolution decided in Step 3
+	destPath, skip, err := downloader.ApplyResolution(destBase, destResolution)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to resolve destination: %v", err)
 		fmt.Fprintln(os.Stderr, errMsg)
@@ -422,7 +487,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	if skip {
 		fmt.Println("Skipping download, using existing artifacts")
 	} else {
-		// Step 5: Download artifacts
+		// Step 6: Download artifacts
 		output.PrintField(os.Stdout, "Downloading to", destPath)
 
 		// Notify download start
@@ -447,7 +512,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		}
 	}
 
-	// Step 6: Run analysis if requested
+	// Step 7: Run analysis if requested
 	if doAnalyze {
 		output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
 
@@ -480,7 +545,11 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 //   - analyzeAlways (--analyze) downloads and analyzes every entry.
 //   - analyzeOnFailure (--analyze-on-failure) downloads and analyzes only
 //     entries whose job failed.
-func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendNotification bool, alwaysDownload, analyzeAlways, analyzeOnFailure bool) {
+//
+// Destinations that were resolved upfront (before monitoring) are reused so
+// no interactive question is asked at this point; entries without an upfront
+// resolution fall back to the configured conflict policy.
+func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy, sendNotification bool, alwaysDownload, analyzeAlways, analyzeOnFailure bool) {
 	for _, e := range entries {
 		if e.status == nil || !e.status.Finished {
 			continue
@@ -500,7 +569,16 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendN
 			continue
 		}
 
-		destPath, skip, err := downloader.ResolveDestination(cfg.Dest, e.metadata, os.Stdin, os.Stdout)
+		var (
+			destPath string
+			skip     bool
+			err      error
+		)
+		if e.destResolved {
+			destPath, skip, err = downloader.ApplyResolution(e.destBase, e.resolution)
+		} else {
+			destPath, skip, err = downloader.ResolveDestinationWithPolicy(cfg.Dest, e.metadata, policy, os.Stdin, os.Stdout)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to resolve destination for %s: %v\n", jobDisplay, err)
 			continue
@@ -540,9 +618,32 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, sendN
 // prowHost is the default Prow instance used when resolving GitHub PR URLs.
 const prowHost = "prow.ci.openshift.org"
 
-// promptJobSelection presents a numbered list of jobs and lets the user pick one.
+// promptJobSelection lets the user pick one prow job using the same fuzzy
+// selector UI as the multi-job monitor flow. When the TUI cannot start (e.g.
+// no TTY), it falls back to a plain numbered prompt so scripting still works.
 func promptJobSelection(jobs []prowapi.Job, pr *resolver.GitHubPR) (string, error) {
-	fmt.Printf("Found %d prow jobs for %s/%s#%d:\n", len(jobs), pr.Org, pr.Repo, pr.Number)
+	fmt.Printf("Found %d prow jobs for %s/%s#%d\n", len(jobs), pr.Org, pr.Repo, pr.Number)
+
+	items := make([]selector.Item, len(jobs))
+	for i, j := range jobs {
+		items[i] = selector.Item{
+			Key:   j.URL,
+			Label: fmt.Sprintf("%-*s  %s", stateWidth, j.State, j.Name),
+		}
+	}
+
+	idx, err := selector.RunSingle(items, nil)
+	if err != nil {
+		return promptJobSelectionNumbered(jobs)
+	}
+	if idx < 0 {
+		return "", fmt.Errorf("selection cancelled")
+	}
+	return jobs[idx].URL, nil
+}
+
+// promptJobSelectionNumbered is the non-TUI fallback for promptJobSelection.
+func promptJobSelectionNumbered(jobs []prowapi.Job) (string, error) {
 	for i, j := range jobs {
 		fmt.Printf("  [%d] %-12s %s\n", i+1, j.State, j.Name)
 	}
@@ -565,10 +666,10 @@ func promptJobSelection(jobs []prowapi.Job, pr *resolver.GitHubPR) (string, erro
 
 // runMonitorFlowForPR is like runMonitorFlow but refreshes jobs via FetchJobsForPR
 // instead of FetchJobs, since GitHub PR URLs are not Prow status page URLs.
-func runMonitorFlowForPR(pr *resolver.GitHubPR, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) ([]*monitorEntry, error) {
+func runMonitorFlowForPR(pr *resolver.GitHubPR, jobs []prowapi.Job, cfg *config.Config, policy downloader.ConflictPolicy) ([]*monitorEntry, bool, error) {
 	entries, items, err := buildEntriesAndItems(jobs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	refreshFn := func() ([]selector.Item, error) {
@@ -589,11 +690,11 @@ func runMonitorFlowForPR(pr *resolver.GitHubPR, jobs []prowapi.Job, interval tim
 
 	selectedIndices, err := selector.Run(items, refreshFn)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(selectedIndices) == 0 {
 		fmt.Println("No jobs selected. Exiting.")
-		return nil, nil
+		return nil, false, nil
 	}
 
 	sort.Ints(selectedIndices)
@@ -603,16 +704,13 @@ func runMonitorFlowForPR(pr *resolver.GitHubPR, jobs []prowapi.Job, interval tim
 		selected[i] = entries[idx]
 	}
 
-	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), interval)
-	if err := monitorJobs(selected, interval, ntfyChannel); err != nil {
-		return nil, err
-	}
-	return selected, nil
+	return monitorSelected(selected, cfg, policy)
 }
 
 // resolveProwURL fetches the given URL and extracts a prow job link from the page.
 // If exactly one prow job link is found it is returned automatically.
-// If multiple are found the user is prompted to select one.
+// If multiple are found the user picks one using the fuzzy selector, falling
+// back to a plain numbered prompt when the TUI cannot start (e.g. no TTY).
 func resolveProwURL(pageURL string) (string, error) {
 	links, err := resolver.FindProwJobLinks(pageURL)
 	if err != nil {
@@ -625,7 +723,25 @@ func resolveProwURL(pageURL string) (string, error) {
 	}
 
 	// Multiple links found: let the user choose
-	fmt.Printf("Found %d prow job links on page:\n", len(links))
+	fmt.Printf("Found %d prow job links on page\n", len(links))
+
+	items := make([]selector.Item, len(links))
+	for i, link := range links {
+		items[i] = selector.Item{Key: link, Label: link}
+	}
+
+	idx, err := selector.RunSingle(items, nil)
+	if err != nil {
+		return resolveProwURLNumbered(links)
+	}
+	if idx < 0 {
+		return "", fmt.Errorf("selection cancelled")
+	}
+	return links[idx], nil
+}
+
+// resolveProwURLNumbered is the non-TUI fallback for resolveProwURL.
+func resolveProwURLNumbered(links []string) (string, error) {
 	for i, link := range links {
 		fmt.Printf("  [%d] %s\n", i+1, link)
 	}

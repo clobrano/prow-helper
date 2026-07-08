@@ -29,6 +29,29 @@ const (
 	NewTimestamped
 )
 
+// ConflictPolicy selects how an existing destination folder is handled.
+// PolicyPrompt asks the user interactively; the other policies resolve the
+// conflict without asking.
+type ConflictPolicy string
+
+const (
+	PolicyPrompt    ConflictPolicy = "prompt"
+	PolicyOverwrite ConflictPolicy = "overwrite"
+	PolicySkip      ConflictPolicy = "skip"
+	PolicyNew       ConflictPolicy = "new"
+)
+
+// ParseConflictPolicy validates a policy string (e.g. from a CLI flag or
+// config file) and returns the corresponding ConflictPolicy.
+func ParseConflictPolicy(s string) (ConflictPolicy, error) {
+	switch ConflictPolicy(s) {
+	case PolicyPrompt, PolicyOverwrite, PolicySkip, PolicyNew:
+		return ConflictPolicy(s), nil
+	default:
+		return "", fmt.Errorf("invalid conflict policy %q (valid: prompt, overwrite, skip, new)", s)
+	}
+}
+
 // BuildDestinationPath constructs the full destination path for artifacts.
 // Format: <baseDest>/<job-name>/<build-id>/
 func BuildDestinationPath(baseDest string, metadata *parser.ProwMetadata) string {
@@ -121,33 +144,45 @@ func streamOutput(reader io.Reader, writer io.Writer) {
 }
 
 // PromptConflictResolution prompts the user to choose how to handle an existing folder.
-// Returns the user's choice.
+// An empty answer defaults to Skip (the safe choice); any other unrecognized
+// input re-prompts, so that a typo can never trigger a destructive overwrite.
 func PromptConflictResolution(path string, stdin io.Reader, stdout io.Writer) (ConflictResolution, error) {
 	fmt.Fprintf(stdout, "Folder exists: %s\n", path)
-	fmt.Fprint(stdout, "[O]verwrite, [S]kip download, [N]ew timestamped folder? ")
 
 	reader := bufio.NewReader(stdin)
-	input, err := reader.ReadString('\n')
-	if err != nil {
-		return Overwrite, err
-	}
+	for {
+		fmt.Fprint(stdout, "[O]verwrite, [S]kip download, [N]ew timestamped folder? [S]: ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return Skip, err
+		}
 
-	input = strings.TrimSpace(strings.ToLower(input))
-	switch input {
-	case "o", "overwrite":
-		return Overwrite, nil
-	case "s", "skip":
-		return Skip, nil
-	case "n", "new":
-		return NewTimestamped, nil
-	default:
-		// Default to overwrite
-		return Overwrite, nil
+		switch strings.TrimSpace(strings.ToLower(input)) {
+		case "o", "overwrite":
+			return Overwrite, nil
+		case "s", "skip", "":
+			return Skip, nil
+		case "n", "new":
+			return NewTimestamped, nil
+		default:
+			fmt.Fprintln(stdout, "Please answer o, s, or n.")
+		}
 	}
 }
 
-// ResolveDestination handles the full destination resolution including conflict handling.
+// ResolveDestination handles the full destination resolution, prompting the
+// user interactively when the destination already exists.
 func ResolveDestination(baseDest string, metadata *parser.ProwMetadata, stdin io.Reader, stdout io.Writer) (string, bool, error) {
+	return ResolveDestinationWithPolicy(baseDest, metadata, PolicyPrompt, stdin, stdout)
+}
+
+// ResolveDestinationWithPolicy resolves the destination path, handling an
+// existing folder according to policy. PolicyPrompt asks the user; the other
+// policies resolve the conflict without any interaction, which makes them
+// safe for unattended runs (background mode, long watch sessions).
+// The returned bool is true when the download should be skipped because the
+// existing artifacts are reused.
+func ResolveDestinationWithPolicy(baseDest string, metadata *parser.ProwMetadata, policy ConflictPolicy, stdin io.Reader, stdout io.Writer) (string, bool, error) {
 	destPath := BuildDestinationPath(baseDest, metadata)
 
 	exists, err := CheckDestinationConflict(destPath)
@@ -159,18 +194,41 @@ func ResolveDestination(baseDest string, metadata *parser.ProwMetadata, stdin io
 		return destPath, false, nil
 	}
 
-	resolution, err := PromptConflictResolution(destPath, stdin, stdout)
+	resolution, err := ResolveConflictAction(destPath, policy, stdin, stdout)
 	if err != nil {
 		return "", false, err
 	}
+	return ApplyResolution(destPath, resolution)
+}
 
+// ResolveConflictAction decides how an existing destination should be handled
+// under the given policy, prompting the user only for PolicyPrompt. It does
+// not touch the filesystem; pass the result to ApplyResolution when the
+// download is about to start. This split lets callers ask the question early
+// (e.g. before a long watch) while deferring any deletion until it is needed.
+func ResolveConflictAction(destPath string, policy ConflictPolicy, stdin io.Reader, stdout io.Writer) (ConflictResolution, error) {
+	switch policy {
+	case PolicyOverwrite:
+		return Overwrite, nil
+	case PolicySkip:
+		return Skip, nil
+	case PolicyNew:
+		return NewTimestamped, nil
+	default: // PolicyPrompt
+		return PromptConflictResolution(destPath, stdin, stdout)
+	}
+}
+
+// ApplyResolution applies a previously chosen ConflictResolution to destPath,
+// returning the final destination and whether the download should be skipped.
+// For Overwrite the existing folder is removed here.
+func ApplyResolution(destPath string, resolution ConflictResolution) (string, bool, error) {
 	switch resolution {
 	case Skip:
 		return destPath, true, nil
 	case NewTimestamped:
 		return CreateTimestampedPath(destPath), false, nil
 	default: // Overwrite
-		// Remove existing directory
 		if err := os.RemoveAll(destPath); err != nil {
 			return "", false, fmt.Errorf("failed to remove existing directory: %w", err)
 		}

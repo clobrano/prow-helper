@@ -15,6 +15,7 @@ type Config struct {
 	AnalyzeCmd  string        `yaml:"analyze_cmd"`  // Command to run after download
 	NtfyChannel string        `yaml:"ntfy_channel"` // ntfy.sh channel for notifications
 	Interval    time.Duration `yaml:"interval"`     // Polling interval for --watch
+	OnConflict  string        `yaml:"on_conflict"`  // Existing-destination policy: prompt|overwrite|skip|new
 }
 
 // DefaultConfig returns a Config with default values.
@@ -24,6 +25,7 @@ func DefaultConfig() *Config {
 		AnalyzeCmd:  "",
 		NtfyChannel: "",
 		Interval:    15 * time.Minute,
+		OnConflict:  "prompt",
 	}
 }
 
@@ -58,6 +60,7 @@ func LoadEnvConfig() *Config {
 		Dest:        os.Getenv("PROW_HELPER_DEST"),
 		AnalyzeCmd:  os.Getenv("PROW_HELPER_ANALYZE_CMD"),
 		NtfyChannel: os.Getenv("NTFY_CHANNEL"),
+		OnConflict:  os.Getenv("PROW_HELPER_ON_CONFLICT"),
 	}
 	if v := os.Getenv("PROW_HELPER_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -78,6 +81,7 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		result.AnalyzeCmd = defaults.AnalyzeCmd
 		result.NtfyChannel = defaults.NtfyChannel
 		result.Interval = defaults.Interval
+		result.OnConflict = defaults.OnConflict
 	}
 
 	// Override with file config
@@ -93,6 +97,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if file.Interval != 0 {
 			result.Interval = file.Interval
+		}
+		if file.OnConflict != "" {
+			result.OnConflict = file.OnConflict
 		}
 	}
 
@@ -110,6 +117,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		if env.Interval != 0 {
 			result.Interval = env.Interval
 		}
+		if env.OnConflict != "" {
+			result.OnConflict = env.OnConflict
+		}
 	}
 
 	// Override with CLI config
@@ -125,6 +135,9 @@ func MergeConfig(cli, env, file, defaults *Config) *Config {
 		}
 		if cli.Interval != 0 {
 			result.Interval = cli.Interval
+		}
+		if cli.OnConflict != "" {
+			result.OnConflict = cli.OnConflict
 		}
 	}
 

@@ -19,6 +19,25 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.NtfyChannel != "" {
 		t.Errorf("DefaultConfig().NtfyChannel = %v, want empty string", cfg.NtfyChannel)
 	}
+	if cfg.OnConflict != "prompt" {
+		t.Errorf("DefaultConfig().OnConflict = %v, want prompt", cfg.OnConflict)
+	}
+}
+
+func TestMergeConfig_OnConflict(t *testing.T) {
+	defaults := DefaultConfig()
+
+	// Default wins when nothing else sets it.
+	merged := MergeConfig(&Config{}, &Config{}, &Config{}, defaults)
+	if merged.OnConflict != "prompt" {
+		t.Errorf("OnConflict = %v, want prompt (default)", merged.OnConflict)
+	}
+
+	// File overrides default, CLI overrides file.
+	merged = MergeConfig(&Config{OnConflict: "new"}, &Config{}, &Config{OnConflict: "skip"}, defaults)
+	if merged.OnConflict != "new" {
+		t.Errorf("OnConflict = %v, want new (CLI should override)", merged.OnConflict)
+	}
 }
 
 func TestGetConfigPath(t *testing.T) {
