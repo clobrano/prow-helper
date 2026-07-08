@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/clobrano/prow-helper/internal/config"
+	"github.com/clobrano/prow-helper/internal/downloader"
 	"github.com/clobrano/prow-helper/internal/notifier"
 	"github.com/clobrano/prow-helper/internal/output"
 	"github.com/clobrano/prow-helper/internal/parser"
@@ -27,6 +29,12 @@ type monitorEntry struct {
 	status         *watcher.JobStatus // nil while still running
 	err            error
 	notified       bool // true once a completion notification has been sent
+
+	// Download destination decided upfront (before monitoring), so conflict
+	// questions are asked when the user is still at the terminal.
+	destBase     string                        // BuildDestinationPath result
+	resolution   downloader.ConflictResolution // how to handle an existing destBase
+	destResolved bool                          // true once destBase/resolution are valid
 }
 
 // formatTimeSuffix returns " (sch: HH:MM, dur: Xm Xs)" when startTime is known.
@@ -95,11 +103,12 @@ func buildEntriesAndItems(jobs []prowapi.Job) ([]*monitorEntry, []selector.Item,
 // runMonitorFlow presents an interactive job selector and monitors the selected
 // jobs until they all complete. It is called from executeWorkflow when --watch
 // is used with a Prow status page URL.
-// Returns the monitored entries after completion (nil if no jobs were selected).
-func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, ntfyChannel string) ([]*monitorEntry, error) {
+// Returns the monitored entries (nil if no jobs were selected) and whether
+// monitoring was interrupted by the user before all jobs completed.
+func runMonitorFlow(pageURL string, jobs []prowapi.Job, cfg *config.Config, policy downloader.ConflictPolicy) ([]*monitorEntry, bool, error) {
 	entries, items, err := buildEntriesAndItems(jobs)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	refreshFn := func() ([]selector.Item, error) {
@@ -120,11 +129,11 @@ func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, 
 
 	selectedIndices, err := selector.Run(items, refreshFn)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(selectedIndices) == 0 {
 		fmt.Println("No jobs selected. Exiting.")
-		return nil, nil
+		return nil, false, nil
 	}
 
 	// Restore original order (selector returns indices in map-iteration order).
@@ -135,16 +144,55 @@ func runMonitorFlow(pageURL string, jobs []prowapi.Job, interval time.Duration, 
 		selected[i] = entries[idx]
 	}
 
-	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), interval)
-	if err := monitorJobs(selected, interval, ntfyChannel); err != nil {
-		return nil, err
+	return monitorSelected(selected, cfg, policy)
+}
+
+// monitorSelected resolves download destinations upfront (when --download is
+// set) and then monitors the selected entries until completion or interrupt.
+func monitorSelected(selected []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy) ([]*monitorEntry, bool, error) {
+	if flagDownload {
+		resolveEntryDestinations(selected, cfg, policy)
 	}
-	return selected, nil
+
+	fmt.Fprintf(os.Stdout, "\nMonitoring %d job(s) (interval: %s)...\n\n", len(selected), cfg.Interval)
+	interrupted, err := monitorJobs(selected, cfg.Interval, cfg.NtfyChannel)
+	if err != nil {
+		return nil, false, err
+	}
+	return selected, interrupted, nil
+}
+
+// resolveEntryDestinations decides the download destination for every selected
+// entry before monitoring starts, so any interactive conflict questions are
+// asked now — while the user is still at the terminal — instead of hours later
+// when the jobs complete. Deletion for an "overwrite" choice is deferred to
+// download time via ApplyResolution.
+func resolveEntryDestinations(entries []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy) {
+	for _, e := range entries {
+		destBase := downloader.BuildDestinationPath(cfg.Dest, e.metadata)
+		exists, err := downloader.CheckDestinationConflict(destBase)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not check destination for %s: %v\n", e.metadata.JobName, err)
+			continue
+		}
+		resolution := downloader.Overwrite // no conflict: plain download into destBase
+		if exists {
+			resolution, err = downloader.ResolveConflictAction(destBase, policy, os.Stdin, os.Stdout)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not resolve destination for %s: %v\n", e.metadata.JobName, err)
+				continue
+			}
+		}
+		e.destBase = destBase
+		e.resolution = resolution
+		e.destResolved = true
+	}
 }
 
 // monitorJobs polls all selected jobs until they all complete, printing a
-// status table after each check round.
-func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel string) error {
+// status table after each check round. Returns interrupted=true when the user
+// stopped monitoring (SIGINT/SIGTERM) before all jobs completed.
+func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel string) (interrupted bool, err error) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -162,13 +210,14 @@ func monitorJobs(entries []*monitorEntry, interval time.Duration, ntfyChannel st
 		if allEntriesDone(entries) {
 			fmt.Println("\nAll monitored jobs have completed.")
 			printFinalSummary(entries)
-			return nil
+			return false, nil
 		}
 
 		select {
 		case <-sigCh:
 			fmt.Println("\nInterrupted.")
-			return nil
+			printFinalSummary(entries)
+			return true, nil
 		case <-ticker.C:
 			checkAllStatuses(entries)
 			notifyCompletions(entries, ntfyChannel)
@@ -280,15 +329,18 @@ func printStatusTable(entries []*monitorEntry) {
 	fmt.Println()
 }
 
-// printFinalSummary prints a summary of pass/fail counts once all jobs are done.
+// printFinalSummary prints a summary of pass/fail counts. Jobs that are still
+// running (possible when monitoring was interrupted) are counted separately.
 func printFinalSummary(entries []*monitorEntry) {
 	fmt.Println("Summary:")
-	passed, failed, errored := 0, 0, 0
+	passed, failed, errored, running := 0, 0, 0, 0
 	for _, e := range entries {
 		switch {
 		case e.err != nil:
 			errored++
-		case e.status != nil && e.status.Passed:
+		case e.status == nil || !e.status.Finished:
+			running++
+		case e.status.Passed:
 			passed++
 		default:
 			failed++
@@ -299,4 +351,21 @@ func printFinalSummary(entries []*monitorEntry) {
 	if errored > 0 {
 		fmt.Printf("  Errored: %d\n", errored)
 	}
+	if running > 0 {
+		fmt.Printf("  Running: %d\n", running)
+	}
+}
+
+// anyMonitoredFailed reports whether any monitored job finished unsuccessfully
+// or could not be checked.
+func anyMonitoredFailed(entries []*monitorEntry) bool {
+	for _, e := range entries {
+		if e.err != nil {
+			return true
+		}
+		if e.status != nil && e.status.Finished && !e.status.Passed {
+			return true
+		}
+	}
+	return false
 }

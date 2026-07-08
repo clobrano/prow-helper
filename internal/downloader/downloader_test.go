@@ -125,8 +125,9 @@ func TestPromptConflictResolution(t *testing.T) {
 		{"skip full", "skip\n", Skip},
 		{"new lowercase", "n\n", NewTimestamped},
 		{"new full", "new\n", NewTimestamped},
-		{"empty defaults to overwrite", "\n", Overwrite},
-		{"unknown defaults to overwrite", "x\n", Overwrite},
+		{"empty defaults to skip", "\n", Skip},
+		{"unknown input re-prompts until valid", "x\no\n", Overwrite},
+		{"typo never overwrites", "0\n\n", Skip},
 	}
 
 	for _, tt := range tests {
@@ -140,6 +141,58 @@ func TestPromptConflictResolution(t *testing.T) {
 			}
 			if got != tt.expected {
 				t.Errorf("PromptConflictResolution() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseConflictPolicy(t *testing.T) {
+	for _, valid := range []string{"prompt", "overwrite", "skip", "new"} {
+		if _, err := ParseConflictPolicy(valid); err != nil {
+			t.Errorf("ParseConflictPolicy(%q) unexpected error: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", "yes", "Overwrite ", "delete"} {
+		if _, err := ParseConflictPolicy(invalid); err == nil {
+			t.Errorf("ParseConflictPolicy(%q) expected error, got nil", invalid)
+		}
+	}
+}
+
+func TestResolveDestinationWithPolicy_NonInteractive(t *testing.T) {
+	tests := []struct {
+		name     string
+		policy   ConflictPolicy
+		wantSkip bool
+		wantTS   bool // want a timestamped path
+	}{
+		{"skip policy reuses existing artifacts", PolicySkip, true, false},
+		{"new policy picks a timestamped folder", PolicyNew, false, true},
+		{"overwrite policy replaces in place", PolicyOverwrite, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			metadata := &parser.ProwMetadata{JobName: "job", BuildID: "42"}
+			existingPath := filepath.Join(tmpDir, "job", "42")
+			if err := os.MkdirAll(existingPath, 0755); err != nil {
+				t.Fatalf("Failed to create test directory: %v", err)
+			}
+
+			// No stdin input available: the policy must resolve without prompting.
+			destPath, skip, err := ResolveDestinationWithPolicy(tmpDir, metadata, tt.policy, strings.NewReader(""), &bytes.Buffer{})
+			if err != nil {
+				t.Fatalf("ResolveDestinationWithPolicy() error = %v", err)
+			}
+			if skip != tt.wantSkip {
+				t.Errorf("skip = %v, want %v", skip, tt.wantSkip)
+			}
+			if tt.wantTS && !strings.Contains(destPath, "42-") {
+				t.Errorf("destPath = %v, want timestamped version", destPath)
+			}
+			if !tt.wantTS && destPath != existingPath {
+				t.Errorf("destPath = %v, want %v", destPath, existingPath)
 			}
 		})
 	}

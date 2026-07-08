@@ -59,6 +59,39 @@ func TestConfirmationDismissedByOtherKey(t *testing.T) {
 	}
 }
 
+func TestSingleModeEnterPicksCursorItem(t *testing.T) {
+	items := []Item{{Label: "a"}, {Label: "b"}, {Label: "c"}}
+	m := newSingleModel(items, nil)
+
+	// SPACE must not toggle anything in single mode.
+	m = pressKey(t, m, tea.KeySpace)
+	if m.countSelected() != 0 {
+		t.Fatal("SPACE should be a no-op in single-select mode")
+	}
+
+	// Move the cursor down and pick with ENTER — no confirmation involved.
+	m = pressKey(t, m, tea.KeyDown)
+	m = pressKey(t, m, tea.KeyEnter)
+	if !m.done {
+		t.Fatal("ENTER should pick the cursor item and finish in single mode")
+	}
+	if !m.selected[1] || m.countSelected() != 1 {
+		t.Fatalf("expected only item 1 selected, got %v", m.selected)
+	}
+}
+
+func TestSingleModeEnterWithNoMatchesDoesNothing(t *testing.T) {
+	items := []Item{{Label: "a"}}
+	m := newSingleModel(items, nil)
+	m.query = "zzz"
+	m.refilter()
+
+	m = pressKey(t, m, tea.KeyEnter)
+	if m.done {
+		t.Fatal("ENTER with no visible items should not finish in single mode")
+	}
+}
+
 func TestEnterWithSelectionExitsImmediately(t *testing.T) {
 	items := []Item{{Label: "a"}, {Label: "b"}}
 	m := newModel(items, nil)

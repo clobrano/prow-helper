@@ -110,6 +110,7 @@ prow-helper --watch --background <url>
 | `--interval` | Polling interval for `--watch` status checks (default: 15m) |
 | `--config` | Path to config file (default: `~/.config/prow-helper/config.yaml`) |
 | `--dest` | Download destination directory (supports `~/` expansion) |
+| `--on-conflict` | How to handle an existing download folder: `prompt`, `overwrite`, `skip`, or `new` timestamped folder (default: `prompt`; background mode uses `new`) |
 | `--ntfy-channel` | ntfy.sh channel for push notifications |
 | `--background` | Run in background and notify on completion |
 | `--help` | Display help information |
@@ -141,6 +142,9 @@ interval: 5m
 
 # ntfy.sh channel for push notifications (optional)
 ntfy_channel: my-prow-notifications
+
+# How to handle an existing download folder: prompt|overwrite|skip|new (default: prompt)
+on_conflict: prompt
 ```
 
 With this config, downloading and analyzing is just:
@@ -161,6 +165,7 @@ prow-helper --watch --download <url>
 export PROW_HELPER_DEST=~/my-artifacts
 export PROW_HELPER_ANALYZE_CMD="claude 'analyze the Prow test artifacts'"
 export PROW_HELPER_INTERVAL=5m
+export PROW_HELPER_ON_CONFLICT=new
 export NTFY_CHANNEL=my-prow-notifications
 ```
 
@@ -182,6 +187,7 @@ export NTFY_CHANNEL=my-prow-notifications
 | 4 | Configuration error |
 | 5 | Watch polling failed |
 | 6 | Job completed with failure |
+| 130 | Interrupted (Ctrl+C) while monitoring |
 
 ## Examples
 
@@ -220,7 +226,7 @@ then opens an interactive selector:
 | `Space` | Toggle job under cursor |
 | `Ctrl+A` | Select / deselect all visible jobs |
 | `Ctrl+R` | Refresh job list from API (preserves selections) |
-| `Enter` | Confirm selection and start monitoring |
+| `Enter` | Confirm selection and start monitoring (asks for a second `Enter` when nothing is selected) |
 | `Esc` | Clear search (first press) or cancel (second press) |
 
 After confirming, prow-helper polls the selected jobs at the configured
@@ -290,8 +296,19 @@ prow-helper --download --background <url>
 
 When artifacts already exist at the destination:
 ```
-Folder exists. [O]verwrite, [S]kip download, [N]ew timestamped folder?
+Folder exists: <path>
+[O]verwrite, [S]kip download, [N]ew timestamped folder? [S]:
 ```
+
+An empty answer defaults to the safe choice (skip); anything else re-prompts,
+so a typo can never overwrite existing artifacts. Use `--on-conflict`
+(or `on_conflict` in the config file) to answer non-interactively:
+`overwrite`, `skip`, or `new`.
+
+When both `--watch` and `--download` are set, the question is asked *before*
+monitoring starts, so the download can proceed unattended once the jobs
+complete. In `--background` mode the tool never prompts: an existing folder
+automatically gets a new timestamped sibling.
 
 ## Development
 

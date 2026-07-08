@@ -42,8 +42,11 @@ type model struct {
 	// a second ENTER confirms exiting without a selection, any other key
 	// dismisses the confirmation and resumes normal input handling.
 	confirmEmpty bool
-	height      int // terminal height (0 = unknown)
-	width       int // terminal width (0 = unknown)
+	// single switches the UI to single-select mode: ENTER picks the item
+	// under the cursor; checkboxes, SPACE and Ctrl+A are disabled.
+	single bool
+	height int // terminal height (0 = unknown)
+	width  int // terminal width (0 = unknown)
 }
 
 func newModel(items []Item, refreshFn func() ([]Item, error)) model {
@@ -54,6 +57,12 @@ func newModel(items []Item, refreshFn func() ([]Item, error)) model {
 		lastRefresh: time.Now(),
 	}
 	m.refilter()
+	return m
+}
+
+func newSingleModel(items []Item, refreshFn func() ([]Item, error)) model {
+	m := newModel(items, refreshFn)
+	m.single = true
 	return m
 }
 
@@ -190,6 +199,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			if m.single {
+				// Single-select: ENTER picks the item under the cursor.
+				if len(m.filtered) == 0 {
+					return m, nil
+				}
+				m.selected = map[int]bool{m.filtered[m.cursor]: true}
+				m.done = true
+				return m, tea.Quit
+			}
 			if m.countSelected() == 0 && !m.confirmEmpty {
 				m.confirmEmpty = true
 				return m, nil
@@ -208,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeySpace:
-			if len(m.filtered) > 0 {
+			if !m.single && len(m.filtered) > 0 {
 				idx := m.filtered[m.cursor]
 				m.selected[idx] = !m.selected[idx]
 			}
@@ -221,6 +239,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyCtrlA:
+			if m.single {
+				break
+			}
 			// Toggle all visible items.  If any are unselected, select all;
 			// if all are already selected, deselect all.
 			allSelected := true
@@ -276,6 +297,10 @@ func (m model) View() string {
 			if i == m.cursor {
 				cursor = "> "
 			}
+			if m.single {
+				fmt.Fprintf(&sb, "  %s%s\n", cursor, m.items[fi].Label)
+				continue
+			}
 			check := "[ ]"
 			if m.selected[fi] {
 				check = "[x]"
@@ -294,6 +319,8 @@ func (m model) View() string {
 
 	var refreshStatus string
 	switch {
+	case m.refreshFn == nil:
+		// No refresh source: omit the refresh hint and status entirely.
 	case m.refreshing:
 		refreshStatus = "  [refreshing...]"
 	case m.refreshErr != nil:
@@ -302,8 +329,18 @@ func (m model) View() string {
 		refreshStatus = fmt.Sprintf("  [last refresh: %s]", m.lastRefresh.Local().Format("15:04:05"))
 	}
 
-	fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all  Ctrl+R refresh  ENTER confirm  ESC cancel%s\n",
-		len(m.filtered), len(m.items), nSel, refreshStatus)
+	refreshHint := ""
+	if m.refreshFn != nil {
+		refreshHint = "  Ctrl+R refresh"
+	}
+
+	if m.single {
+		fmt.Fprintf(&sb, "\n  %d/%d shown  |  ↑↓ navigate%s  ENTER select  ESC cancel%s\n",
+			len(m.filtered), len(m.items), refreshHint, refreshStatus)
+	} else {
+		fmt.Fprintf(&sb, "\n  %d/%d shown  %d selected  |  ↑↓ navigate  SPACE toggle  Ctrl+A all%s  ENTER confirm  ESC cancel%s\n",
+			len(m.filtered), len(m.items), nSel, refreshHint, refreshStatus)
+	}
 
 	return sb.String()
 }
@@ -337,4 +374,30 @@ func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
 		}
 	}
 	return result, nil
+}
+
+// RunSingle presents the interactive fuzzy list in single-select mode and
+// returns the index (into items) of the item the user picked with ENTER.
+// Returns -1 without an error if the user cancels (ESC or Ctrl+C).
+// refreshFn, if non-nil, is called when the user presses Ctrl+R.
+func RunSingle(items []Item, refreshFn func() ([]Item, error)) (int, error) {
+	if len(items) == 0 {
+		return -1, fmt.Errorf("no items to select from")
+	}
+	p := tea.NewProgram(newSingleModel(items, refreshFn), tea.WithAltScreen())
+	final, err := p.Run()
+	if err != nil {
+		return -1, fmt.Errorf("selector: %w", err)
+	}
+
+	fm := final.(model)
+	if fm.quit || !fm.done {
+		return -1, nil
+	}
+	for idx, sel := range fm.selected {
+		if sel {
+			return idx, nil
+		}
+	}
+	return -1, nil
 }
