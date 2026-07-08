@@ -40,17 +40,26 @@ const (
 
 var (
 	// CLI flags
-	flagDest           string
-	flagAnalyzeCmd     string
-	flagBackground     bool
-	flagNotifyComplete bool // Internal flag set by background mode
-	flagWatch          bool
-	flagDownload       bool
-	flagNtfyChannel    string
-	flagInterval       time.Duration
-	flagConfig         string
-	flagOnConflict     string
+	flagDest             string
+	flagAnalyzeCmd       string
+	flagBackground       bool
+	flagNotifyComplete   bool // Internal flag set by background mode
+	flagWatch            bool
+	flagDownload         bool
+	flagAnalyze          bool
+	flagAnalyzeOnFailure bool
+	flagNtfyChannel      string
+	flagInterval         time.Duration
+	flagConfig           string
+	flagOnConflict       string
 )
+
+// anyDownloadAction reports whether any action flag may trigger an artifact
+// download (--analyze-on-failure only does so conditionally, once the job's
+// pass/fail status is known).
+func anyDownloadAction() bool {
+	return flagDownload || flagAnalyze || flagAnalyzeOnFailure
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -66,9 +75,10 @@ When using --watch without a URL inside a git repository that has an open
 pull request, prow-helper will auto-detect the PR and watch it.
 
 At least one action flag is required:
-  --watch        Watch running jobs until completion
-  --download     Download test artifacts
-  --analyze-cmd  Run a command on downloaded artifacts (requires --download)
+  --watch               Watch running jobs until completion
+  --download            Download test artifacts
+  --analyze             Download (if needed) and analyze artifacts
+  --analyze-on-failure  Like --analyze, but only if the job failed
 
 Examples:
   # Auto-detect PR from current git directory
@@ -86,8 +96,11 @@ Examples:
   # Download artifacts
   prow-helper --download --dest ~/artifacts <url>
 
-  # Watch, then download and analyze
-  prow-helper --watch --download --analyze-cmd "claude 'analyze'" <url>`,
+  # Watch, then analyze (downloads automatically)
+  prow-helper --watch --analyze-cmd "claude 'analyze'" --analyze <url>
+
+  # Watch, then analyze only if the job failed
+  prow-helper --watch --analyze-cmd "claude 'analyze'" --analyze-on-failure <url>`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runMain,
 }
@@ -95,7 +108,9 @@ Examples:
 func init() {
 	rootCmd.Flags().BoolVar(&flagWatch, "watch", false, "Watch running jobs until completion")
 	rootCmd.Flags().BoolVar(&flagDownload, "download", false, "Download test artifacts")
-	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run on downloaded artifacts (requires --download)")
+	rootCmd.Flags().BoolVar(&flagAnalyze, "analyze", false, "Download (if needed) and analyze artifacts with the configured analyze command")
+	rootCmd.Flags().BoolVar(&flagAnalyzeOnFailure, "analyze-on-failure", false, "Like --analyze, but only download/analyze if the job failed")
+	rootCmd.Flags().StringVar(&flagAnalyzeCmd, "analyze-cmd", "", "Command to run during analysis (used with --analyze or --analyze-on-failure)")
 	rootCmd.Flags().DurationVar(&flagInterval, "interval", 0, "Polling interval for --watch status checks (default: 15m)")
 	rootCmd.Flags().StringVar(&flagConfig, "config", "", "Path to config file (default: ~/.config/prow-helper/config.yaml)")
 	rootCmd.Flags().StringVar(&flagDest, "dest", "", "Download destination directory")
@@ -130,14 +145,14 @@ func runMain(cmd *cobra.Command, args []string) error {
 		args = []string{detectedURL}
 	}
 
-	if !flagWatch && !flagDownload {
-		fmt.Fprintln(os.Stderr, "Error: at least one action flag is required (--watch or --download)")
+	if !flagWatch && !flagDownload && !flagAnalyze && !flagAnalyzeOnFailure {
+		fmt.Fprintln(os.Stderr, "Error: at least one action flag is required (--watch, --download, --analyze, or --analyze-on-failure)")
 		fmt.Fprintln(os.Stderr)
 		return cmd.Help()
 	}
 
-	if flagAnalyzeCmd != "" && !flagDownload {
-		fmt.Fprintln(os.Stderr, "Error: --analyze-cmd requires --download")
+	if flagAnalyze && flagAnalyzeOnFailure {
+		fmt.Fprintln(os.Stderr, "Error: --analyze and --analyze-on-failure cannot be used together")
 		os.Exit(ExitConfigError)
 		return nil
 	}
@@ -215,18 +230,18 @@ func loadConfig() (*config.Config, downloader.ConflictPolicy, error) {
 }
 
 // finishMonitorWorkflow handles the aftermath of a multi-job monitor run:
-// downloads for completed jobs (skipped when interrupted) and the final exit
-// code — ExitInterrupted on Ctrl+C, ExitJobFailed when any job failed.
+// downloads/analysis for completed jobs (skipped when interrupted) and the
+// final exit code — ExitInterrupted on Ctrl+C, ExitJobFailed when any job failed.
 func finishMonitorWorkflow(completed []*monitorEntry, interrupted bool, cfg *config.Config, policy downloader.ConflictPolicy, sendNotification bool) error {
 	if interrupted {
-		if flagDownload {
+		if anyDownloadAction() {
 			fmt.Println("Skipping download (interrupted).")
 		}
 		os.Exit(ExitInterrupted)
 		return nil
 	}
-	if flagDownload && len(completed) > 0 {
-		downloadMonitoredEntries(completed, cfg, policy, sendNotification)
+	if anyDownloadAction() && len(completed) > 0 {
+		downloadMonitoredEntries(completed, cfg, policy, sendNotification, flagDownload, flagAnalyze, flagAnalyzeOnFailure)
 	}
 	if anyMonitoredFailed(completed) {
 		os.Exit(ExitJobFailed)
@@ -236,9 +251,34 @@ func finishMonitorWorkflow(completed []*monitorEntry, interrupted bool, cfg *con
 
 // executeWorkflow runs the main workflow based on the action flags:
 //   - --watch: watch running jobs until completion
-//   - --download: download test artifacts
-//   - --analyze-cmd (with --download): run analysis on downloaded artifacts
+//   - --download: unconditionally download test artifacts
+//   - --analyze: download (if needed) and analyze artifacts
+//   - --analyze-on-failure: like --analyze, but only for failed jobs
 func executeWorkflow(prowURL string, sendNotification bool) error {
+	// Step 0: Load configuration up front; it doesn't depend on the URL and
+	// every code path below needs it.
+	cfg, policy, err := loadConfig()
+	if err != nil {
+		errMsg := fmt.Sprintf("Failed to load configuration: %v", err)
+		fmt.Fprintln(os.Stderr, errMsg)
+		if sendNotification {
+			notifier.Notify("Configuration", errMsg, false)
+		}
+		os.Exit(ExitConfigError)
+		return nil
+	}
+
+	if (flagAnalyze || flagAnalyzeOnFailure) && cfg.AnalyzeCmd == "" {
+		errMsg := "Error: --analyze/--analyze-on-failure requires an analyze command (--analyze-cmd, PROW_HELPER_ANALYZE_CMD, or analyze_cmd in the config file)"
+		fmt.Fprintln(os.Stderr, errMsg)
+		os.Exit(ExitConfigError)
+		return nil
+	}
+
+	// wantDownload is true whenever any action flag implies fetching artifacts.
+	// --analyze-on-failure only implies it conditionally, once the job's
+	// pass/fail status is known, so it's handled separately below.
+	wantDownload := anyDownloadAction()
 
 	// Step 1: Validate URL; if not a direct prow URL, try to resolve it
 	if err := parser.ValidateURL(prowURL); err != nil {
@@ -261,12 +301,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 
 			// Multiple jobs with --watch: use the multi-job monitor flow
 			if flagWatch && len(jobs) > 1 {
-				cfg, policy, cfgErr := loadConfig()
-				if cfgErr != nil {
-					fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
-					os.Exit(ExitConfigError)
-					return nil
-				}
 				completed, interrupted, monErr := runMonitorFlowForPR(pr, jobs, cfg, policy)
 				if monErr != nil {
 					return monErr
@@ -294,12 +328,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			if flagWatch {
 				jobs, fetchErr := prowapi.FetchJobs(prowURL)
 				if fetchErr == nil && len(jobs) > 0 {
-					cfg, policy, cfgErr := loadConfig()
-					if cfgErr != nil {
-						fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", cfgErr)
-						os.Exit(ExitConfigError)
-						return nil
-					}
 					completed, interrupted, monErr := runMonitorFlow(prowURL, jobs, cfg, policy)
 					if monErr != nil {
 						return monErr
@@ -342,18 +370,6 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	}
 	output.PrintField(os.Stdout, "Build ID", metadata.BuildID)
 
-	// Step 3: Load configuration
-	cfg, policy, err := loadConfig()
-	if err != nil {
-		errMsg := fmt.Sprintf("Failed to load configuration: %v", err)
-		fmt.Fprintln(os.Stderr, errMsg)
-		if sendNotification {
-			notifier.Notify("Configuration", errMsg, false)
-		}
-		os.Exit(ExitConfigError)
-		return nil
-	}
-
 	if cfg.NtfyChannel != "" {
 		output.PrintField(os.Stdout, "Ntfy channel", cfg.NtfyChannel)
 	}
@@ -365,14 +381,15 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		jobDisplay = metadata.PRRef + " " + metadata.JobName
 	}
 
-	// Step 4: If downloading, decide the destination now — before a potentially
-	// hours-long watch — so any conflict question is asked while the user is
-	// still at the terminal. Deletion for "overwrite" is deferred to Step 5.
+	// Step 3: If any action may download artifacts, decide the destination now —
+	// before a potentially hours-long watch — so any conflict question is asked
+	// while the user is still at the terminal. Deletion for "overwrite" is
+	// deferred until the download actually starts (Step 5).
 	var (
 		destBase       string
 		destResolution downloader.ConflictResolution
 	)
-	if flagDownload {
+	if wantDownload {
 		destBase = downloader.BuildDestinationPath(cfg.Dest, metadata)
 		exists, checkErr := downloader.CheckDestinationConflict(destBase)
 		if checkErr != nil {
@@ -395,7 +412,10 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		}
 	}
 
-	// Step 5: If watch mode, poll until job completes
+	// Step 4: Determine the job's pass/fail status, either by watching it to
+	// completion or, if --analyze-on-failure needs it and we're not
+	// watching, with a single status check.
+	var jobStatus *watcher.JobStatus
 	if flagWatch {
 		status, err := watcher.Watch(metadata, cfg.Interval, os.Stdout)
 		if err != nil {
@@ -405,11 +425,12 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			os.Exit(ExitWatchFailed)
 			return nil
 		}
+		jobStatus = status
 
 		msg := output.FormatJobStatusMessage(jobDisplay, status.Passed)
 		fmt.Println(msg)
 
-		if !flagDownload {
+		if !wantDownload {
 			// Watch-only mode: notify and exit
 			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, status.Passed), status.Passed, cfg.NtfyChannel, true)
 			if !status.Passed {
@@ -417,14 +438,43 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 			}
 			return nil
 		}
-		// --download is set: fall through to download artifacts
+	} else if flagAnalyzeOnFailure {
+		finishedURL := watcher.BuildFinishedJSONURL(metadata)
+		status, statusErr := watcher.CheckJobStatus(finishedURL)
+		if statusErr != nil {
+			errMsg := fmt.Sprintf("Failed to check job status: %v", statusErr)
+			fmt.Fprintln(os.Stderr, errMsg)
+			sendNotificationWithConfig(jobDisplay, errMsg, false, cfg.NtfyChannel, sendNotification)
+			os.Exit(ExitWatchFailed)
+			return nil
+		}
+		jobStatus = status
+		if status == nil {
+			fmt.Println("Warning: job has not finished yet; cannot verify pass/fail status for --analyze-on-failure")
+		}
 	}
 
-	if !flagDownload {
+	if !wantDownload {
 		return nil
 	}
 
-	// Step 6: Apply the destination resolution decided in Step 4
+	// doAnalyze/doDownload fold in the conditional --analyze-on-failure
+	// behavior now that jobStatus (if relevant) is known.
+	jobFailed := jobStatus != nil && !jobStatus.Passed
+	doAnalyze := flagAnalyze || (flagAnalyzeOnFailure && jobFailed)
+	doDownload := flagDownload || doAnalyze
+
+	if !doDownload {
+		if jobStatus == nil {
+			fmt.Println("Job status unknown; skipping download and analysis (--analyze-on-failure)")
+		} else {
+			fmt.Println("Job passed; skipping download and analysis (--analyze-on-failure)")
+			sendNotificationWithConfig(jobDisplay, notifier.FormatJobStatusMessage(jobDisplay, jobStatus.Passed), jobStatus.Passed, cfg.NtfyChannel, sendNotification || flagWatch)
+		}
+		return nil
+	}
+
+	// Step 5: Apply the destination resolution decided in Step 3
 	destPath, skip, err := downloader.ApplyResolution(destBase, destResolution)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to resolve destination: %v", err)
@@ -437,7 +487,7 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 	if skip {
 		fmt.Println("Skipping download, using existing artifacts")
 	} else {
-		// Step 7: Download artifacts
+		// Step 6: Download artifacts
 		output.PrintField(os.Stdout, "Downloading to", destPath)
 
 		// Notify download start
@@ -457,13 +507,13 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 		fmt.Println("Download complete!")
 
 		// Notify download complete (only if we will run analysis)
-		if (sendNotification || cfg.NtfyChannel != "") && cfg.AnalyzeCmd != "" {
+		if (sendNotification || cfg.NtfyChannel != "") && doAnalyze {
 			sendNotificationWithConfig(jobDisplay, notifier.FormatDownloadCompleteMessage(jobDisplay, destPath), true, cfg.NtfyChannel, sendNotification)
 		}
 	}
 
-	// Step 8: Run analysis command if configured
-	if cfg.AnalyzeCmd != "" {
+	// Step 7: Run analysis if requested
+	if doAnalyze {
 		output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
 
 		// Notify analysis start
@@ -490,10 +540,16 @@ func executeWorkflow(prowURL string, sendNotification bool) error {
 }
 
 // downloadMonitoredEntries downloads artifacts for each completed job from
-// the monitor flow, and optionally runs analysis on each. Destinations that
-// were resolved upfront (before monitoring) are reused so no interactive
-// question is asked at this point.
-func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy, sendNotification bool) {
+// the monitor flow, and analyzes them if requested.
+//   - alwaysDownload (--download) unconditionally downloads every entry.
+//   - analyzeAlways (--analyze) downloads and analyzes every entry.
+//   - analyzeOnFailure (--analyze-on-failure) downloads and analyzes only
+//     entries whose job failed.
+//
+// Destinations that were resolved upfront (before monitoring) are reused so
+// no interactive question is asked at this point; entries without an upfront
+// resolution fall back to the configured conflict policy.
+func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy, sendNotification bool, alwaysDownload, analyzeAlways, analyzeOnFailure bool) {
 	for _, e := range entries {
 		if e.status == nil || !e.status.Finished {
 			continue
@@ -502,6 +558,15 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, polic
 		jobDisplay := e.metadata.JobName
 		if e.prRef != "" {
 			jobDisplay = e.prRef + " " + e.metadata.JobName
+		}
+
+		jobFailed := !e.status.Passed
+		doAnalyze := analyzeAlways || (analyzeOnFailure && jobFailed)
+		doDownload := alwaysDownload || doAnalyze
+
+		if !doDownload {
+			fmt.Printf("Skipping %s: job passed (--analyze-on-failure)\n", jobDisplay)
+			continue
 		}
 
 		var (
@@ -535,7 +600,7 @@ func downloadMonitoredEntries(entries []*monitorEntry, cfg *config.Config, polic
 			fmt.Printf("Download complete: %s\n", jobDisplay)
 		}
 
-		if cfg.AnalyzeCmd != "" {
+		if doAnalyze {
 			output.PrintField(os.Stdout, "Running analysis", cfg.AnalyzeCmd+" "+destPath)
 			if err := analyzer.RunAnalysis(cfg.AnalyzeCmd, destPath); err != nil {
 				fmt.Fprintf(os.Stderr, "Analysis failed for %s: %v\n", jobDisplay, err)

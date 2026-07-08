@@ -147,10 +147,11 @@ func runMonitorFlow(pageURL string, jobs []prowapi.Job, cfg *config.Config, poli
 	return monitorSelected(selected, cfg, policy)
 }
 
-// monitorSelected resolves download destinations upfront (when --download is
-// set) and then monitors the selected entries until completion or interrupt.
+// monitorSelected resolves download destinations upfront (when any action may
+// download artifacts) and then monitors the selected entries until completion
+// or interrupt.
 func monitorSelected(selected []*monitorEntry, cfg *config.Config, policy downloader.ConflictPolicy) ([]*monitorEntry, bool, error) {
-	if flagDownload {
+	if anyDownloadAction() {
 		resolveEntryDestinations(selected, cfg, policy)
 	}
 
