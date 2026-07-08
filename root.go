@@ -61,7 +61,7 @@ It accepts a PROW test URL, a GitHub pull request URL, a Prow status page URL,
 or any page containing prow job links.
 
 When using --watch without a URL inside a git repository that has an open
-pull request, prow-helper will auto-detect the PR and offer to watch it.
+pull request, prow-helper will auto-detect the PR and watch it.
 
 At least one action flag is required:
   --watch        Watch running jobs until completion
@@ -123,17 +123,7 @@ func runMain(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		}
 
-		fmt.Printf("Detected PR: %s\nWatch it? [Y/n]: ", detectedURL)
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read input: %w", err)
-		}
-		input = strings.TrimSpace(strings.ToLower(input))
-		if input != "" && input != "y" && input != "yes" {
-			fmt.Println("Aborted.")
-			return nil
-		}
+		fmt.Printf("Detected PR: %s\n", detectedURL)
 		args = []string{detectedURL}
 	}
 

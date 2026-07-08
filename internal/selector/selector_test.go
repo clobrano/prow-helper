@@ -3,7 +3,75 @@ package selector
 import (
 	"fmt"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+// pressKey sends a key of the given type to the model and returns the updated model.
+func pressKey(t *testing.T, m model, keyType tea.KeyType) model {
+	t.Helper()
+	updated, _ := m.Update(tea.KeyMsg{Type: keyType})
+	return updated.(model)
+}
+
+func TestEnterWithNoSelectionAsksConfirmation(t *testing.T) {
+	items := []Item{{Label: "a"}, {Label: "b"}}
+	m := newModel(items, nil)
+
+	// First ENTER with nothing selected must not exit; it asks for confirmation.
+	m = pressKey(t, m, tea.KeyEnter)
+	if m.done {
+		t.Fatal("first ENTER with no selection should not confirm the (empty) selection")
+	}
+	if !m.confirmEmpty {
+		t.Fatal("first ENTER with no selection should ask for confirmation")
+	}
+
+	// Second ENTER confirms exiting with an empty selection.
+	m = pressKey(t, m, tea.KeyEnter)
+	if !m.done {
+		t.Fatal("second ENTER should confirm exiting without a selection")
+	}
+}
+
+func TestConfirmationDismissedByOtherKey(t *testing.T) {
+	items := []Item{{Label: "a"}, {Label: "b"}}
+	m := newModel(items, nil)
+
+	m = pressKey(t, m, tea.KeyEnter)
+	if !m.confirmEmpty {
+		t.Fatal("first ENTER with no selection should ask for confirmation")
+	}
+
+	// SPACE dismisses the confirmation and toggles the item under the cursor.
+	m = pressKey(t, m, tea.KeySpace)
+	if m.confirmEmpty {
+		t.Fatal("any key other than ENTER should dismiss the confirmation")
+	}
+	if m.countSelected() != 1 {
+		t.Fatalf("SPACE should still toggle the item, got %d selected", m.countSelected())
+	}
+
+	// ENTER now exits directly since one item is selected.
+	m = pressKey(t, m, tea.KeyEnter)
+	if !m.done {
+		t.Fatal("ENTER with a selection should confirm immediately")
+	}
+}
+
+func TestEnterWithSelectionExitsImmediately(t *testing.T) {
+	items := []Item{{Label: "a"}, {Label: "b"}}
+	m := newModel(items, nil)
+
+	m = pressKey(t, m, tea.KeySpace)
+	m = pressKey(t, m, tea.KeyEnter)
+	if !m.done {
+		t.Fatal("ENTER with a selection should confirm without asking")
+	}
+	if m.confirmEmpty {
+		t.Fatal("confirmation should not trigger when items are selected")
+	}
+}
 
 func TestFuzzyMatch(t *testing.T) {
 	tests := []struct {

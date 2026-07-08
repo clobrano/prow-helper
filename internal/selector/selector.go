@@ -38,6 +38,10 @@ type model struct {
 	refreshing  bool
 	refreshErr  error
 	lastRefresh time.Time
+	// confirmEmpty is set when ENTER is pressed with nothing selected;
+	// a second ENTER confirms exiting without a selection, any other key
+	// dismisses the confirmation and resumes normal input handling.
+	confirmEmpty bool
 	height      int // terminal height (0 = unknown)
 	width       int // terminal width (0 = unknown)
 }
@@ -69,6 +73,17 @@ func (m *model) refilter() {
 	case m.cursor >= len(m.filtered):
 		m.cursor = len(m.filtered) - 1
 	}
+}
+
+// countSelected returns the number of currently selected items.
+func (m model) countSelected() int {
+	n := 0
+	for _, v := range m.selected {
+		if v {
+			n++
+		}
+	}
+	return n
 }
 
 // fuzzyMatch returns true if query is a case-insensitive substring of target.
@@ -153,6 +168,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.confirmEmpty && msg.Type != tea.KeyEnter {
+			// Any key other than a second ENTER dismisses the confirmation;
+			// the key is then handled normally below.
+			m.confirmEmpty = false
+		}
 		switch msg.Type {
 
 		case tea.KeyCtrlC:
@@ -170,6 +190,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case tea.KeyEnter:
+			if m.countSelected() == 0 && !m.confirmEmpty {
+				m.confirmEmpty = true
+				return m, nil
+			}
 			m.done = true
 			return m, tea.Quit
 
@@ -261,11 +285,11 @@ func (m model) View() string {
 	}
 
 	// Footer.
-	nSel := 0
-	for _, v := range m.selected {
-		if v {
-			nSel++
-		}
+	nSel := m.countSelected()
+
+	if m.confirmEmpty {
+		fmt.Fprintf(&sb, "\n  No jobs selected — press ENTER again to exit without watching, or any other key to keep selecting\n")
+		return sb.String()
 	}
 
 	var refreshStatus string
@@ -287,6 +311,8 @@ func (m model) View() string {
 // Run presents the interactive fuzzy multi-select UI and returns the indices
 // (into the original items slice) that the user selected.
 // Returns nil without an error if the user cancels (ESC or Ctrl+C).
+// Confirming with ENTER while nothing is selected asks for a second ENTER,
+// since exiting without a selection is most likely a mistake.
 // refreshFn, if non-nil, is called when the user presses Ctrl+R to reload
 // the item list; previously-selected items are re-selected by Key.
 func Run(items []Item, refreshFn func() ([]Item, error)) ([]int, error) {
